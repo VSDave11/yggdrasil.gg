@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/djdak/.claude/**)",
+      "Bash(cmd.exe /c 'dir /s /b C:\\\\Users\\\\djdak\\\\AppData\\\\Roaming\\\\claude-cli-nodejs')",
+      "WebFetch(domain:github.com)",
+      "Bash(python \"C:/Users/djdak/.claude/plugins/marketplaces/ui-ux-pro-max-skill/src/ui-ux-pro-max/scripts/search.py\" \"glassmorphism dark neon gold\" --domain style)",
+      "Bash(gh repo:*)"
+    ]
+  }
+}
