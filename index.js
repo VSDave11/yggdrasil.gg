@@ -32,24 +32,20 @@ function verifyRememberToken(token) {
 }
 
 // Obnov session z remember cookie pokud session chybi (Render restart / zavreni prohlizece)
-app.use((req, res, next) => {
-    if (!req.session.user) {
-        const raw = req.headers.cookie || '';
-        const match = raw.split(';').map(c=>c.trim()).find(c=>c.startsWith('remember_token='));
-        if (match) {
-            const val = decodeURIComponent(match.substring('remember_token='.length));
-            console.log('[REMEMBER] token found, verifying...');
-            const user = verifyRememberToken(val);
-            console.log('[REMEMBER] verified:', user ? user.jmeno : 'FAILED');
-            if (user) {
-                req.session.user = user;
-                req.session.save(() => next());
-                return;
-            }
+function restoreFromRemember(req) {
+    if (req.session.user) return req.session.user;
+    const raw = req.headers.cookie || '';
+    const match = raw.split(';').map(c=>c.trim()).find(c=>c.startsWith('remember_token='));
+    if (match) {
+        const val = decodeURIComponent(match.substring('remember_token='.length));
+        const user = verifyRememberToken(val);
+        if (user) {
+            req.session.user = user;
+            return user;
         }
     }
-    next();
-});
+    return null;
+}
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -332,6 +328,7 @@ app.post('/login', async (req, res) => {
 
 // BOD 4: LOGOUT
 app.get('/logout', (req, res) => {
+    res.setHeader('Set-Cookie', 'remember_token=; Path=/; HttpOnly; Max-Age=0');
     req.session.destroy(() => { res.redirect('/'); });
 });
 
@@ -339,7 +336,7 @@ app.get('/logout', (req, res) => {
 
 // GET - zobraz stranku pro zmenu hesla
 app.get('/change-password', (req, res) => {
-    if (!req.session.user) return res.redirect('/');
+    if (!restoreFromRemember(req)) return res.redirect('/');
     const error   = req.query.error   || '';
     const success = req.query.success || '';
     const initials = req.session.user.jmeno ? req.session.user.jmeno.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) : '?';
@@ -456,7 +453,7 @@ function togglePw(id,btn){const i=document.getElementById(id);i.type=i.type==='p
 
 // POST - zpracuj zmenu hesla
 app.post('/change-password', async (req, res) => {
-    if (!req.session.user) return res.redirect('/');
+    if (!restoreFromRemember(req)) return res.redirect('/');
     const { currentPassword, newPassword, confirmPassword } = req.body;
     const userEmail = req.session.user.email;
 
@@ -516,7 +513,7 @@ app.post('/change-password', async (req, res) => {
 
 // BOD 3: CSV EXPORT směn
 app.get('/export-csv', async (req, res) => {
-    if (!req.session.user) return res.redirect('/');
+    if (!restoreFromRemember(req)) return res.redirect('/');
 
     // Kdo může exportovat: Admin, David Winkler, Ondřej Merxbauer, Team Leaders
     const allowedNames  = ['David Winkler', 'Ondřej Merxbauer'];
@@ -963,7 +960,7 @@ app.post('/delete-month', async (req, res) => {
 // --- DASHBOARD ---
 
 app.get('/dashboard', async (req, res) => {
-    if (!req.session.user) return res.redirect('/');
+    if (!restoreFromRemember(req)) return res.redirect('/');
 
     let hHTML = ""; let rHTML = ""; let pRowsHTML = ""; let mainContentHTML = "";
     let allShifts = [];
