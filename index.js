@@ -699,6 +699,55 @@ app.post('/add-shift', async (req, res) => {
     } catch(e) { res.status(500).send(e.message); }
 });
 
+// custom-colors - sdilene barvy pro vsechny uzivatele
+app.get('/api/custom-colors', async (req, res) => {
+    try {
+        await doc.loadInfo();
+        const sheet = doc.sheetsByTitle['CustomColors'];
+        if (!sheet) return res.json({});
+        const rows = await sheet.getRows();
+        const colors = {};
+        rows.forEach(r => {
+            const name = r.get('Name'), color = r.get('Color');
+            if (name && color) colors[name] = color;
+        });
+        res.json(colors);
+    } catch(e) { res.status(500).send(e.message); }
+});
+
+app.post('/api/set-color', async (req, res) => {
+    try {
+        const { name, color } = req.body;
+        if (!name) return res.status(400).send('Missing name');
+        await doc.loadInfo();
+        let sheet = doc.sheetsByTitle['CustomColors'];
+        if (!sheet) {
+            sheet = await doc.addSheet({ title: 'CustomColors', headerValues: ['Name','Color'] });
+        }
+        const rows = await sheet.getRows();
+        const existing = rows.find(r => r.get('Name') === name);
+        if (color) {
+            if (existing) { existing.set('Color', color); await existing.save(); }
+            else { await sheet.addRow({ Name: name, Color: color }); }
+        } else {
+            if (existing) await existing.delete();
+        }
+        res.json({ success: true });
+    } catch(e) { res.status(500).send(e.message); }
+});
+
+app.post('/api/reset-colors', async (req, res) => {
+    try {
+        await doc.loadInfo();
+        const sheet = doc.sheetsByTitle['CustomColors'];
+        if (sheet) {
+            const rows = await sheet.getRows();
+            for (let i = rows.length - 1; i >= 0; i--) await rows[i].delete();
+        }
+        res.json({ success: true });
+    } catch(e) { res.status(500).send(e.message); }
+});
+
 app.post('/update-shift', async (req, res) => {
     if (!req.session.user) return res.status(401).send('Unauthorized');
     const { originalName, originalDate, originalStart, name, date, start, end, product, trading, note } = req.body;
@@ -2668,7 +2717,7 @@ ${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' :
 
     // BOD 2: Scroll vždy na začátek = Pondělí
     window.onload=()=>{
-        applyCustomColorsToDOM();
+        loadSharedColors(()=>{ applyCustomColorsToDOM(); });
         // Clean up warp arrival overlay + remove ?warp=1 from URL
         const wa = document.getElementById('warpArrival');
         if (wa) {
@@ -2850,13 +2899,15 @@ ${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' :
     // =============================================
     // COLOR PICKER
     // =============================================
+    let _sharedColors = {};
     function applyCustomColorsToDOM(){
         try {
-            const cc = JSON.parse(localStorage.getItem('ygg_custom_colors')||'{}');
+            const cc = _sharedColors;
             if(!Object.keys(cc).length) return;
             Object.keys(cc).forEach(name => {
                 const newColor = cc[name];
                 if(!newColor) return;
+                pColors[name] = newColor;
                 const sideEl = document.querySelector('.user-item[data-name="'+name+'"]');
                 if(sideEl){
                     sideEl.style.borderLeftColor = newColor;
@@ -2871,16 +2922,17 @@ ${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' :
                     const prodColor = el.dataset.prodColor;
                     if(!prodColor) return;
                     el.dataset.personColor = newColor;
-                    el.style.background = newColor + '18';
-                    el.style.borderLeftColor = newColor;
-                    el.style.borderTopColor = newColor + '44';
-                    el.style.borderBottomColor = newColor + '22';
-                    el.style.boxShadow = '0 2px 8px ' + newColor + '22';
-                    const nameSpan = el.querySelector('span');
-                    if(nameSpan) nameSpan.style.color = newColor;
+                    const bg = 'repeating-linear-gradient(135deg,'+newColor+' 0px,'+newColor+' 40px,'+prodColor+' 40px,'+prodColor+' 80px)';
+                    el.style.background = bg;
+                    el.style.borderRight = '3px solid '+prodColor;
                 });
             });
         } catch(e){}
+    }
+    function loadSharedColors(cb){
+        fetch('/api/custom-colors').then(r=>r.json()).then(cc=>{
+            _sharedColors=cc; if(cb)cb();
+        }).catch(()=>{ if(cb)cb(); });
     }
 
     const _defaultColors = ${personColorsJSON};
@@ -2894,7 +2946,7 @@ ${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' :
     }
     function renderColorList(){
         const q=(document.getElementById('colorSearch')||{}).value||'';
-        const cc=JSON.parse(localStorage.getItem('ygg_custom_colors')||'{}');
+        const cc=_sharedColors;
         const names=Object.keys(pColors).filter(n=>!q||n.toLowerCase().includes(q.toLowerCase()));
         document.getElementById('colorList').innerHTML=names.map(n=>{
             const cur=cc[n]||pColors[n]||'#888';
@@ -2906,18 +2958,19 @@ ${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' :
         }).join('');
     }
     function setPersonColor(name,color){
-        const cc=JSON.parse(localStorage.getItem('ygg_custom_colors')||'{}');
-        cc[name]=color;
-        localStorage.setItem('ygg_custom_colors',JSON.stringify(cc));
+        _sharedColors[name]=color;
         pColors[name]=color;
         renderColorList();
+        applyCustomColorsToDOM();
+        fetch('/api/set-color',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,color:color}),credentials:'same-origin'});
     }
     function resetAllColors(){
         if(!confirm('Reset all colors to default?')) return;
-        localStorage.removeItem('ygg_custom_colors');
+        _sharedColors={};
         Object.keys(_defaultColors).forEach(k => pColors[k] = _defaultColors[k]);
         applyCustomColorsToDOM();
         renderColorList();
+        fetch('/api/reset-colors',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin'});
     }
 </script>
 </body>
