@@ -6,12 +6,14 @@ const session = require('express-session');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.set('trust proxy', 1); // Render reverse proxy
+
 const COOKIE_SECRET = 'yggdrasil-viking-secret-2026';
 app.use(session({
     secret: COOKIE_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, httpOnly: true }
+    cookie: { secure: false, httpOnly: true, sameSite: 'lax' }
 }));
 const cookieParser = require('cookie-parser');
 app.use(cookieParser(COOKIE_SECRET));
@@ -21,6 +23,8 @@ app.use((req, res, next) => {
     if (!req.session.user && req.signedCookies.remember_token) {
         try {
             req.session.user = JSON.parse(req.signedCookies.remember_token);
+            req.session.save(() => next());
+            return;
         } catch(e) {}
     }
     next();
@@ -267,10 +271,12 @@ app.post('/login', async (req, res) => {
         if (foundUser) {
             req.session.user = foundUser;
 
-            // Remember me — signed cookie na 30 dni
+            // Remember me — signed cookie + prodlouzena session na 30 dni
             if (req.body.remember === 'on') {
+                const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+                req.session.cookie.maxAge = thirtyDays;
                 res.cookie('remember_token', JSON.stringify(foundUser), {
-                    signed: true, httpOnly: true, maxAge: 30 * 24 * 60 * 60 * 1000
+                    signed: true, httpOnly: true, maxAge: thirtyDays, sameSite: 'lax'
                 });
             }
 
