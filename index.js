@@ -2,6 +2,7 @@ const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const session = require('express-session');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,17 +16,34 @@ app.use(session({
     saveUninitialized: false,
     cookie: { secure: false, httpOnly: true, sameSite: 'lax' }
 }));
-const cookieParser = require('cookie-parser');
-app.use(cookieParser(COOKIE_SECRET));
 
-// Obnov session z remember cookie pokud session expirovala (Render restart)
+// Remember me helpers — HMAC-signed token
+function makeRememberToken(user) {
+    const data = Buffer.from(JSON.stringify(user)).toString('base64');
+    const sig = crypto.createHmac('sha256', COOKIE_SECRET).update(data).digest('hex');
+    return data + '.' + sig;
+}
+function verifyRememberToken(token) {
+    if (!token || !token.includes('.')) return null;
+    const [data, sig] = token.split('.');
+    const expected = crypto.createHmac('sha256', COOKIE_SECRET).update(data).digest('hex');
+    if (sig !== expected) return null;
+    try { return JSON.parse(Buffer.from(data, 'base64').toString()); } catch(e) { return null; }
+}
+
+// Obnov session z remember cookie pokud session chybi (Render restart / zavreni prohlizece)
 app.use((req, res, next) => {
-    if (!req.session.user && req.signedCookies.remember_token) {
-        try {
-            req.session.user = JSON.parse(req.signedCookies.remember_token);
-            req.session.save(() => next());
-            return;
-        } catch(e) {}
+    if (!req.session.user) {
+        const token = req.headers.cookie && req.headers.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('remember_token='));
+        if (token) {
+            const val = decodeURIComponent(token.split('=')[1]);
+            const user = verifyRememberToken(val);
+            if (user) {
+                req.session.user = user;
+                req.session.save(() => next());
+                return;
+            }
+        }
     }
     next();
 });
@@ -271,12 +289,13 @@ app.post('/login', async (req, res) => {
         if (foundUser) {
             req.session.user = foundUser;
 
-            // Remember me — signed cookie + prodlouzena session na 30 dni
+            // Remember me — HMAC token cookie na 30 dni
             if (req.body.remember === 'on') {
                 const thirtyDays = 30 * 24 * 60 * 60 * 1000;
                 req.session.cookie.maxAge = thirtyDays;
-                res.cookie('remember_token', JSON.stringify(foundUser), {
-                    signed: true, httpOnly: true, maxAge: thirtyDays, sameSite: 'lax'
+                const token = makeRememberToken(foundUser);
+                res.cookie('remember_token', token, {
+                    httpOnly: true, maxAge: thirtyDays, sameSite: 'lax'
                 });
             }
 
