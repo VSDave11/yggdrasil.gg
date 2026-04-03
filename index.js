@@ -294,9 +294,7 @@ app.post('/login', async (req, res) => {
                 const thirtyDays = 30 * 24 * 60 * 60 * 1000;
                 req.session.cookie.maxAge = thirtyDays;
                 const token = makeRememberToken(foundUser);
-                res.cookie('remember_token', token, {
-                    httpOnly: true, maxAge: thirtyDays, sameSite: 'lax'
-                });
+                res.append('Set-Cookie', 'remember_token=' + encodeURIComponent(token) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + (30*24*60*60));
             }
 
             // AuditLog - zapis prihlaseni
