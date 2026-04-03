@@ -34,10 +34,13 @@ function verifyRememberToken(token) {
 // Obnov session z remember cookie pokud session chybi (Render restart / zavreni prohlizece)
 app.use((req, res, next) => {
     if (!req.session.user) {
-        const token = req.headers.cookie && req.headers.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('remember_token='));
-        if (token) {
-            const val = decodeURIComponent(token.split('=')[1]);
+        const raw = req.headers.cookie || '';
+        const match = raw.split(';').map(c=>c.trim()).find(c=>c.startsWith('remember_token='));
+        if (match) {
+            const val = decodeURIComponent(match.substring('remember_token='.length));
+            console.log('[REMEMBER] token found, verifying...');
             const user = verifyRememberToken(val);
+            console.log('[REMEMBER] verified:', user ? user.jmeno : 'FAILED');
             if (user) {
                 req.session.user = user;
                 req.session.save(() => next());
