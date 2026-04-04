@@ -582,9 +582,16 @@ app.get('/export-csv', async (req, res) => {
                         const cell = sheet.getCell(r, pm.startCol + slot.o);
                         const val = cell.value ? cell.value.toString().trim() : '';
                         if (val && val !== '-') {
+                            let csvDate = dateVal;
+                            const sH = parseInt(slot.s.split(':')[0]), eH = parseInt(slot.e.split(':')[0]);
+                            if (sH >= 20 && eH < 12) {
+                                const dd = new Date(dateVal + 'T12:00:00');
+                                dd.setDate(dd.getDate() - 1);
+                                csvDate = dd.toISOString().slice(0, 10);
+                            }
                             val.split(',').forEach(n => {
                                 const name = n.trim();
-                                if (name) rows.push([dateVal, name, pm.trading, pm.name, slot.s, slot.e, '', title]);
+                                if (name) rows.push([csvDate, name, pm.trading, pm.name, slot.s, slot.e, '', title]);
                             });
                         }
                     });
@@ -1088,10 +1095,19 @@ app.get('/dashboard', async (req, res) => {
                             const cell = sheet.getCell(r, col);
                             const val = cell.value ? cell.value.toString().trim() : '';
                             if (val !== '' && val !== '-') {
+                                // Nocni smena (start > end, napr 23:16-07:12): v sheetu je na radku pondeli,
+                                // ale zacina v nedeli — posun datum o 1 den zpet
+                                let shiftDate = dateVal;
+                                const startH = parseInt(slot.s.split(':')[0]), endH = parseInt(slot.e.split(':')[0]);
+                                if (startH >= 20 && endH < 12) {
+                                    const d = new Date(dateVal + 'T12:00:00');
+                                    d.setDate(d.getDate() - 1);
+                                    shiftDate = d.toISOString().slice(0, 10);
+                                }
                                 val.split(',').forEach(n => {
                                     const name = n.trim();
                                     if (name) allShifts.push({
-                                        Date: dateVal, Name: name,
+                                        Date: shiftDate, Name: name,
                                         Trading: pm.trading, Product: pm.name,
                                         Start: slot.s, End: slot.e, Note: "",
                                         // Uloz zdroj pro moznost smazani
@@ -1189,6 +1205,19 @@ app.get('/dashboard', async (req, res) => {
             }
         });
 
+        // Crew mapa: seskupi lidi na stejnem datu+produktu+casu
+        const crewMap = {};
+        allShifts.forEach(s => {
+            const key = s.Date + '|' + s.Product + '|' + s.Start + '|' + s.End;
+            if (!crewMap[key]) crewMap[key] = [];
+            crewMap[key].push(s.Name);
+        });
+        function getCrewmates(s) {
+            const key = s.Date + '|' + s.Product + '|' + s.Start + '|' + s.End;
+            const all = crewMap[key] || [];
+            return all.filter(n => n !== s.Name);
+        }
+
         // BOD 7: Timeline header – 24 hodinových buněk (40px = 1h, tečkovaná půlhodina uprostřed)
         function buildHoursRow() {
             let spans = '';
@@ -1217,6 +1246,8 @@ app.get('/dashboard', async (req, res) => {
             // Helper funkce pro pill
             function buildPersonPill(s, name, dStr, dayIdx, left, width, personColor, prodColor) {
                 const pillBg = 'repeating-linear-gradient(135deg,' + personColor + ' 0px,' + personColor + ' 40px,' + prodColor + ' 40px,' + prodColor + ' 80px)';
+                const crew = getCrewmates(s);
+                const crewLabel = crew.length > 0 ? '<span style="margin-left:6px;font-size:0.62rem;opacity:0.7;background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px;">+' + crew.length + ' ' + crew.join(', ') + '</span>' : '';
                 return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-person="' + safe(name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(s.Product) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
                      + ' style="left:' + left + '%;width:' + width + '%;top:14px;height:34px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';"'
                      + ' onclick="openViewModal(\'' + safe(name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(s.Product) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
@@ -1225,6 +1256,7 @@ app.get('/dashboard', async (req, res) => {
                      + '<span style="font-weight:700;">' + s.Product + '</span>'
                      + '<span style="margin:0 5px;opacity:0.5;">-</span>'
                      + '<span style="font-size:0.78rem;opacity:0.9;">' + name + '</span>'
+                     + crewLabel
                      + '</div>';
             }
 
@@ -1285,6 +1317,8 @@ app.get('/dashboard', async (req, res) => {
                     // Helper pro pill produktoveho radku
                     function buildProdPill(s, pName, dStr, dayIdx, left, width, personColor, prodColor) {
                         const pillBg = 'repeating-linear-gradient(135deg,' + personColor + ' 0px,' + personColor + ' 40px,' + prodColor + ' 40px,' + prodColor + ' 80px)';
+                        const crew = getCrewmates(s);
+                        const crewLabel = crew.length > 0 ? '<span style="margin-left:6px;font-size:0.62rem;opacity:0.7;background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px;">+' + crew.length + ' ' + crew.join(', ') + '</span>' : '';
                         return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-person="' + safe(s.Name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(pName) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
                              + ' style="left:' + left + '%;width:' + width + '%;top:14px;height:34px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';"'
                              + ' onclick="openViewModal(\'' + safe(s.Name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(pName) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
@@ -1293,6 +1327,7 @@ app.get('/dashboard', async (req, res) => {
                              + '<span style="font-weight:700;">' + s.Name + '</span>'
                              + '<span style="margin:0 5px;opacity:0.5;">-</span>'
                              + '<span style="font-size:0.78rem;opacity:0.9;">' + pName + '</span>'
+                             + crewLabel
                              + '</div>';
                     }
 
@@ -1730,7 +1765,6 @@ app.get('/dashboard', async (req, res) => {
     </script>
 </head>
 <body>
-${req.query.warp === '1' ? '<div class="warp-arrival" id="warpArrival"></div>' : ''}
 <div class="dashboard-container">
     <aside class="sidebar">
         <div class="logo-area">
