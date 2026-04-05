@@ -830,6 +830,9 @@ app.post('/update-shift', async (req, res) => {
                 target.set('Trading', trading);
                 target.set('Note',    note || '');
                 await target.save();
+            } else {
+                invalidateCache();
+                return res.json({ success: true, found: false });
             }
         }
 
@@ -842,7 +845,7 @@ app.post('/update-shift', async (req, res) => {
         } catch(e) {}
 
         invalidateCache();
-        res.json({ success: true });
+        res.json({ success: true, found: true });
     } catch(e) { res.status(500).send(e.message); }
 });
 
@@ -1252,6 +1255,9 @@ app.get('/dashboard', async (req, res) => {
             function buildPersonPill(s, name, dStr, dayIdx, left, width, personColor, prodColor, pillPart) {
                 const pillBg = 'repeating-linear-gradient(135deg,' + personColor + ' 0px,' + personColor + ' 40px,' + prodColor + ' 40px,' + prodColor + ' 80px)';
                 const crew = getCrewmates(s);
+                // Shared note: find best note from all shifts in this group
+                const groupShifts = allShifts.filter(x => x.Date === s.Date && x.Product === s.Product && x.Start === s.Start && x.End === s.End);
+                const sharedNote = groupShifts.map(x => x.Note).filter(n => n && n !== 'Crew' && !n.endsWith('[Crew]'))[0] || s.Note || '';
                 const pillH = crew.length > 0 ? (34 + crew.length * 14) : 34;
                 let crewHTML = '';
                 if (crew.length > 0) {
@@ -1262,9 +1268,9 @@ app.get('/dashboard', async (req, res) => {
                     });
                     crewHTML += '</div>';
                 }
-                return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(s.Product) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
+                return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(s.Product) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(sharedNote) + '"'
                      + ' style="left:' + left + '%;width:' + width + '%;top:50%;transform:translateY(-50%);height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
-                     + ' onclick="openViewModal(\'' + safe(name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(s.Product) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
+                     + ' onclick="openViewModal(\'' + safe(name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(s.Product) + '\',\'' + safe(sharedNote) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
                      + '<div style="display:flex;align-items:center;white-space:nowrap;">'
                      + '<span class="pill-time" style="font-size:0.78rem;font-weight:700;">' + s.Start + ' - ' + s.End + '</span>'
                      + '<span style="margin:0 5px;opacity:0.5;">|</span>'
@@ -1335,6 +1341,9 @@ app.get('/dashboard', async (req, res) => {
                     function buildProdPill(s, pName, dStr, dayIdx, left, width, personColor, prodColor, pillPart) {
                         const crew = getCrewmates(s);
                         const allOnShift = [s.Name, ...crew];
+                        // Collect best note from all shifts in this group
+                        const groupShifts = allShifts.filter(x => x.Date === s.Date && x.Product === s.Product && x.Start === s.Start && x.End === s.End);
+                        const groupNote = groupShifts.map(x => x.Note).filter(n => n && n !== 'Crew' && !n.endsWith('[Crew]'))[0] || s.Note || '';
                         // Use gradient with product color only (multiple people = product-focused pill)
                         const pillBg = crew.length > 0
                             ? 'linear-gradient(135deg,' + prodColor + ' 0%,' + prodColor + 'cc 100%)'
@@ -1349,7 +1358,7 @@ app.get('/dashboard', async (req, res) => {
                             });
                             namesHTML += '</div>';
                         }
-                        return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(s.Name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(pName) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
+                        return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(s.Name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(pName) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(groupNote) + '"'
                              + ' style="left:' + left + '%;width:' + width + '%;top:50%;transform:translateY(-50%);height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
                              + ' onclick="openViewModal(\'' + safe(s.Name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(pName) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
                              + '<div style="display:flex;align-items:center;white-space:nowrap;">'
@@ -1971,9 +1980,13 @@ app.get('/dashboard', async (req, res) => {
         <div id="mSplitSection" style="display:none;padding:14px 24px 18px;border-top:1px solid #1e2030;background:rgba(91,127,166,0.04);">
             <div style="font-size:0.6rem;color:rgba(91,127,166,0.7);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;font-weight:600;">&#9135; Split Shift — Double Coverage</div>
             <label style="font-size:0.62rem;color:rgba(251,192,45,0.6);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;font-weight:600;">Second Trader</label>
-            <select id="mSplitName" class="modal-input" style="margin-bottom:10px;">${allNames.map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select>
-            <div style="font-size:0.68rem;color:rgba(255,255,255,0.3);line-height:1.7;">
-                Splits the shift in half — first trader takes <strong id="splitHalf1" style="color:rgba(251,192,45,0.7);">--</strong>, second takes <strong id="splitHalf2" style="color:rgba(91,127,166,0.7);">--</strong>.
+            <select id="mSplitName" class="modal-input" style="margin-bottom:10px;" onchange="_updateSplitPreview()">${allNames.map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div style="flex:1;font-size:0.68rem;color:rgba(255,255,255,0.3);line-height:1.7;">
+                    <span id="splitName1" style="color:rgba(251,192,45,0.7);font-weight:600;"></span> takes <strong id="splitHalf1" style="color:rgba(251,192,45,0.7);">--</strong><br>
+                    <span id="splitName2" style="color:rgba(91,127,166,0.7);font-weight:600;"></span> takes <strong id="splitHalf2" style="color:rgba(91,127,166,0.7);">--</strong>
+                </div>
+                <button type="button" id="mSplitSwapBtn" onclick="toggleSplitOrder()" style="padding:6px 12px;background:rgba(91,127,166,0.1);color:#7ba3cc;border:1px solid rgba(91,127,166,0.3);border-radius:6px;cursor:pointer;font-size:0.7rem;font-weight:600;" onmouseover="this.style.background='rgba(91,127,166,0.2)'" onmouseout="this.style.background='rgba(91,127,166,0.1)'">&#8645; Swap</button>
             </div>
         </div>
         <!-- BOD 5: History / last edit -->
@@ -2464,7 +2477,7 @@ app.get('/dashboard', async (req, res) => {
         btn.style.background = isOpen ? 'rgba(91,127,166,0.2)' : 'rgba(66,165,245,0.06)';
         btn.style.borderColor = isOpen ? 'rgba(91,127,166,0.5)' : 'rgba(66,165,245,0.25)';
         btn.style.color = isOpen ? '#7ba3cc' : '#42a5f5';
-        if(isOpen) _updateSplitPreview();
+        if(isOpen){ _splitReversed = false; _updateSplitPreview(); }
     }
     let _extraTraders = [];
     function addExtraTrader(){
@@ -2498,8 +2511,16 @@ app.get('/dashboard', async (req, res) => {
     }
     function _timeToMins(t){ const [h,m]=(t||'00:00').split(':').map(Number); return h*60+m; }
     function _minsToTime(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
+    let _splitReversed = false;
+    function toggleSplitOrder(){ _splitReversed = !_splitReversed; _updateSplitPreview(); }
     function _updateSplitPreview(){
         const s=document.getElementById('mStart').value, e=document.getElementById('mEnd').value;
+        const n1 = document.getElementById('mName').value;
+        const n2 = document.getElementById('mSplitName').value;
+        const firstName = _splitReversed ? n2 : n1;
+        const secondName = _splitReversed ? n1 : n2;
+        document.getElementById('splitName1').textContent = firstName;
+        document.getElementById('splitName2').textContent = secondName;
         if(!s||!e){document.getElementById('splitHalf1').textContent='--';document.getElementById('splitHalf2').textContent='--';return;}
         const sm=_timeToMins(s), em=_timeToMins(e);
         const dur=(em>sm?em-sm:1440-sm+em);
@@ -2532,8 +2553,10 @@ app.get('/dashboard', async (req, res) => {
             const sm = _timeToMins(data.start), em = _timeToMins(data.end);
             const dur = em > sm ? em - sm : 1440 - sm + em;
             const mid = _minsToTime(sm + Math.floor(dur / 2));
-            const shift1 = {...data, end: mid, note: data.note ? data.note + ' [Split 1/2]' : 'Split 1/2'};
-            const shift2 = {...data, name: name2, start: mid, note: data.note ? data.note + ' [Split 2/2]' : 'Split 2/2'};
+            const firstN = _splitReversed ? name2 : data.name;
+            const secondN = _splitReversed ? data.name : name2;
+            const shift1 = {...data, name: firstN, end: mid, note: data.note ? data.note + ' [Split 1/2]' : 'Split 1/2'};
+            const shift2 = {...data, name: secondN, start: mid, note: data.note ? data.note + ' [Split 2/2]' : 'Split 2/2'};
             const url = mode === 'add' ? '/add-shift' : '/update-shift';
             const [r1, r2] = await Promise.all([
                 fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(shift1)}),
@@ -2545,9 +2568,20 @@ app.get('/dashboard', async (req, res) => {
             const r1 = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
             if (!r1.ok) { alert('Error saving shift'); return; }
             for (const tName of _extraTraders) {
-                const crewData = {...data, name: tName};
-                const r = await fetch('/add-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(crewData)});
-                if (!r.ok) { alert('Error saving shift for ' + tName); return; }
+                if (mode === 'edit') {
+                    // Try update existing crew shift
+                    const crewData = {...data, name: tName, originalName: tName, originalDate: data.originalDate || data.date, originalStart: data.originalStart || data.start};
+                    const r = await fetch('/update-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(crewData)});
+                    const rJson = r.ok ? await r.json() : null;
+                    if (!rJson || !rJson.found) {
+                        // Crew member not found in sheet — create new
+                        const r2 = await fetch('/add-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data, name: tName})});
+                        if (!r2.ok) { alert('Error saving shift for ' + tName); return; }
+                    }
+                } else {
+                    const r = await fetch('/add-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...data, name: tName})});
+                    if (!r.ok) { alert('Error saving shift for ' + tName); return; }
+                }
             }
         } else {
             const resp = await fetch(mode==='add'?'/add-shift':'/update-shift',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
