@@ -1263,7 +1263,7 @@ app.get('/dashboard', async (req, res) => {
                     crewHTML += '</div>';
                 }
                 return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(s.Product) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
-                     + ' style="left:' + left + '%;width:' + width + '%;top:14px;height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
+                     + ' style="left:' + left + '%;width:' + width + '%;top:50%;transform:translateY(-50%);height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
                      + ' onclick="openViewModal(\'' + safe(name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(s.Product) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
                      + '<div style="display:flex;align-items:center;white-space:nowrap;">'
                      + '<span class="pill-time" style="font-size:0.78rem;font-weight:700;">' + s.Start + ' - ' + s.End + '</span>'
@@ -1329,39 +1329,48 @@ app.get('/dashboard', async (req, res) => {
             tradingHierarchy.forEach(trading => {
                 trading.subs.forEach(pName => {
                     let psHTML = "";
+                    const renderedProdKeys = new Set();
 
                     // Helper pro pill produktoveho radku
                     function buildProdPill(s, pName, dStr, dayIdx, left, width, personColor, prodColor, pillPart) {
-                        const pillBg = 'repeating-linear-gradient(135deg,' + personColor + ' 0px,' + personColor + ' 40px,' + prodColor + ' 40px,' + prodColor + ' 80px)';
                         const crew = getCrewmates(s);
-                        const pillH = crew.length > 0 ? (34 + crew.length * 14) : 34;
-                        let crewHTML = '';
-                        if (crew.length > 0) {
-                            crewHTML = '<div style="display:flex;flex-wrap:wrap;gap:2px;margin-top:1px;">';
-                            crew.forEach(c => {
-                                const cc = personColors[c] || '#888';
-                                crewHTML += '<span style="font-size:0.55rem;padding:1px 5px;border-radius:3px;background:' + cc + '33;color:' + cc + ';border:1px solid ' + cc + '55;white-space:nowrap;">' + c + '</span>';
+                        const allOnShift = [s.Name, ...crew];
+                        // Use gradient with product color only (multiple people = product-focused pill)
+                        const pillBg = crew.length > 0
+                            ? 'linear-gradient(135deg,' + prodColor + ' 0%,' + prodColor + 'cc 100%)'
+                            : 'repeating-linear-gradient(135deg,' + personColor + ' 0px,' + personColor + ' 40px,' + prodColor + ' 40px,' + prodColor + ' 80px)';
+                        const pillH = 34 + (allOnShift.length > 1 ? allOnShift.length * 14 : 0);
+                        let namesHTML = '';
+                        if (allOnShift.length > 1) {
+                            namesHTML = '<div style="display:flex;flex-wrap:wrap;gap:2px;margin-top:1px;">';
+                            allOnShift.forEach(n => {
+                                const nc = personColors[n] || '#888';
+                                namesHTML += '<span style="font-size:0.55rem;padding:1px 5px;border-radius:3px;background:' + nc + '33;color:' + nc + ';border:1px solid ' + nc + '55;white-space:nowrap;">' + n + '</span>';
                             });
-                            crewHTML += '</div>';
+                            namesHTML += '</div>';
                         }
                         return '<div class="shift-pill" data-orig-start="' + s.Start + '" data-orig-end="' + s.End + '" data-orig-day="' + dayIdx + '" data-pill-part="' + (pillPart||0) + '" data-shift-date="' + s.Date + '" data-person="' + safe(s.Name) + '" data-person-color="' + personColor + '" data-prod-color="' + prodColor + '" data-tooltip-product="' + safe(pName) + '" data-tooltip-trading="' + safe(s.Trading) + '" data-tooltip-note="' + safe(s.Note||'') + '"'
-                             + ' style="left:' + left + '%;width:' + width + '%;top:14px;height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
+                             + ' style="left:' + left + '%;width:' + width + '%;top:50%;transform:translateY(-50%);height:' + pillH + 'px;background:' + pillBg + ';border-right:3px solid ' + prodColor + ';display:flex;flex-direction:column;justify-content:center;padding:0 8px;"'
                              + ' onclick="openViewModal(\'' + safe(s.Name) + '\',\'' + dStr + '\',\'' + s.Start + '\',\'' + s.End + '\',\'' + safe(pName) + '\',\'' + safe(s.Note) + '\',\'' + s.Trading + '\',\'' + personColor + '\',\'' + prodColor + '\',\'' + (s._sheet||'') + '\',' + (s._row||0) + ',' + (s._col||0) + ')">'
                              + '<div style="display:flex;align-items:center;white-space:nowrap;">'
                              + '<span class="pill-time" style="font-size:0.78rem;font-weight:700;">' + s.Start + ' - ' + s.End + '</span>'
                              + '<span style="margin:0 5px;opacity:0.5;">|</span>'
-                             + '<span style="font-weight:700;">' + s.Name + '</span>'
-                             + '<span style="margin:0 5px;opacity:0.5;">-</span>'
+                             + (allOnShift.length > 1
+                                 ? '<span style="font-weight:700;">' + allOnShift.length + ' traders</span><span style="margin:0 5px;opacity:0.5;">-</span>'
+                                 : '<span style="font-weight:700;">' + s.Name + '</span><span style="margin:0 5px;opacity:0.5;">-</span>')
                              + '<span style="font-size:0.78rem;opacity:0.9;">' + pName + '</span>'
                              + '</div>'
-                             + crewHTML
+                             + namesHTML
                              + '</div>';
                     }
 
                     // Pre-pass: nocni smeny ze dne pred timto tydnem, ktere pokracuji do pondeli
                     allShifts.filter(s => s.Product === pName && s.Date === prevWeekDayStr).forEach(s => {
+                        const preKey = s.Date + '|' + s.Product + '|' + s.Start + '|' + s.End;
+                        if (renderedProdKeys.has(preKey)) return;
                         const sp = timeToPercent(s.Start), ep = timeToPercent(s.End);
                         if (sp > ep && ep > 0) {
+                            renderedProdKeys.add(preKey);
                             const pc = personColors[s.Name] || '#555';
                             const prc = getProductColor(trading.name, pName);
                             psHTML += buildProdPill(s, pName, toISOLocal(startOfWeek), 0, 0, ep / 7, pc, prc, 2);
@@ -1373,6 +1382,11 @@ app.get('/dashboard', async (req, res) => {
                         const dStr = toISOLocal(date);
                         const prodShifts = allShifts.filter(s => s.Product === pName && s.Date === dStr);
                         prodShifts.forEach(s => {
+                            // Deduplicate: skip if same product+date+start+end already rendered
+                            const prodKey = s.Date + '|' + s.Product + '|' + s.Start + '|' + s.End;
+                            if (renderedProdKeys.has(prodKey)) return;
+                            renderedProdKeys.add(prodKey);
+
                             const startPct2 = timeToPercent(s.Start);
                             const endPct2   = timeToPercent(s.End);
                             const effEndPct2 = (endPct2 === 0 && startPct2 > 0) ? 100 : endPct2;
@@ -1799,7 +1813,7 @@ app.get('/dashboard', async (req, res) => {
             <span class="logo-fallback">YGGDRASIL.GG</span>
         </div>
         <div class="sidebar-inner">
-        <input type="text" id="warriorSearch" placeholder="&#128269; Search warriors..." onkeyup="filterWarriors()" style="width:100%;padding:8px 10px;background:#13151e;border:1px solid #1e2030;color:#8892a4;border-radius:6px;margin-bottom:12px;box-sizing:border-box;font-size:0.8rem;outline:none;transition:0.15s;" onfocus="this.style.borderColor='rgba(251,192,45,0.4)';this.style.color='#d0d8e8'" onblur="this.style.borderColor='#1e2030';this.style.color='#8892a4'">
+        <input type="text" id="warriorSearch" placeholder="&#128269; Search traders..." onkeyup="filterWarriors()" style="width:100%;padding:8px 10px;background:#13151e;border:1px solid #1e2030;color:#8892a4;border-radius:6px;margin-bottom:12px;box-sizing:border-box;font-size:0.8rem;outline:none;transition:0.15s;" onfocus="this.style.borderColor='rgba(251,192,45,0.4)';this.style.color='#d0d8e8'" onblur="this.style.borderColor='#1e2030';this.style.color='#8892a4'">
 
         <div class="mini-calendar" id="miniCal"></div>
 
@@ -1922,8 +1936,12 @@ app.get('/dashboard', async (req, res) => {
             <input type="hidden" id="oName">
             <input type="hidden" id="oDate">
             <input type="hidden" id="oStart">
-            <label>Warrior</label>
+            <label>Trader</label>
             <select id="mName" class="modal-input">${allNames.map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select>
+            <div id="mExtraTradersWrap" style="margin-top:6px;">
+                <div id="mExtraTradersList" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;"></div>
+                <button type="button" id="mAddTraderBtn" onclick="addExtraTrader()" style="padding:5px 12px;background:rgba(76,175,80,0.1);color:#66bb6a;border:1px solid rgba(76,175,80,0.25);border-radius:6px;cursor:pointer;font-size:0.7rem;font-weight:600;letter-spacing:0.5px;" onmouseover="this.style.background='rgba(76,175,80,0.2)'" onmouseout="this.style.background='rgba(76,175,80,0.1)'">+ Add Trader</button>
+            </div>
             <label>Date</label>
             <input type="date" id="mDate" class="modal-input">
             <label>Trading Category</label>
@@ -1945,7 +1963,6 @@ app.get('/dashboard', async (req, res) => {
         <div class="modal-actions">
             <button class="modal-btn-confirm" onclick="saveShift()">CONFIRM</button>
             <button id="mSplitBtn" class="modal-btn-exchange" onclick="toggleSplitMode()" style="display:none;">&#9135; SPLIT</button>
-            <button id="mCrewBtn" class="modal-btn-exchange" onclick="toggleCrewMode()" style="display:none;background:rgba(76,175,80,0.06);color:#66bb6a;border-color:rgba(76,175,80,0.25);" onmouseover="this.style.background='rgba(76,175,80,0.15)';this.style.borderColor='rgba(76,175,80,0.5)'" onmouseout="if(!this.classList.contains('active')){this.style.background='rgba(76,175,80,0.06)';this.style.borderColor='rgba(76,175,80,0.25)'}">&#43; CREW</button>
             <button id="mExchangeBtn" class="modal-btn-exchange" onclick="startExchange()" style="display:none;">&#8646; EXCHANGE</button>
             <button id="mDeleteBtn" class="modal-btn-delete" onclick="deleteShift()" style="display:none;">DELETE</button>
             <button class="modal-btn-cancel" onclick="closeModal()">Cancel</button>
@@ -1953,21 +1970,11 @@ app.get('/dashboard', async (req, res) => {
         <!-- DoubleShift split section -->
         <div id="mSplitSection" style="display:none;padding:14px 24px 18px;border-top:1px solid #1e2030;background:rgba(91,127,166,0.04);">
             <div style="font-size:0.6rem;color:rgba(91,127,166,0.7);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;font-weight:600;">&#9135; Split Shift — Double Coverage</div>
-            <label style="font-size:0.62rem;color:rgba(251,192,45,0.6);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;font-weight:600;">Second Warrior</label>
+            <label style="font-size:0.62rem;color:rgba(251,192,45,0.6);text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;font-weight:600;">Second Trader</label>
             <select id="mSplitName" class="modal-input" style="margin-bottom:10px;">${allNames.map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select>
             <div style="font-size:0.68rem;color:rgba(255,255,255,0.3);line-height:1.7;">
-                Splits the shift in half — first warrior takes <strong id="splitHalf1" style="color:rgba(251,192,45,0.7);">--</strong>, second takes <strong id="splitHalf2" style="color:rgba(91,127,166,0.7);">--</strong>.
+                Splits the shift in half — first trader takes <strong id="splitHalf1" style="color:rgba(251,192,45,0.7);">--</strong>, second takes <strong id="splitHalf2" style="color:rgba(91,127,166,0.7);">--</strong>.
             </div>
-        </div>
-        <!-- CREW section — unlimited warriors -->
-        <div id="mCrewSection" style="display:none;padding:14px 24px 18px;border-top:1px solid #1e2030;background:rgba(76,175,80,0.03);">
-            <div style="font-size:0.6rem;color:rgba(76,175,80,0.6);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;font-weight:600;">&#43; Crew — Add warriors to this shift</div>
-            <div id="crewList" style="margin-bottom:10px;"></div>
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-                <select id="crewAddSelect" class="modal-input" style="flex:1;margin:0;">${allNames.map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select>
-                <button type="button" onclick="addCrewMember()" style="padding:8px 14px;background:rgba(76,175,80,0.15);color:#66bb6a;border:1px solid rgba(76,175,80,0.3);border-radius:8px;cursor:pointer;font-size:0.75rem;font-weight:700;letter-spacing:0.5px;white-space:nowrap;">+ ADD</button>
-            </div>
-            <div style="font-size:0.67rem;color:rgba(255,255,255,0.2);line-height:1.6;">Custom start/end optional — defaults to main shift time if left empty.</div>
         </div>
         <!-- BOD 5: History / last edit -->
         <div id="mHistorySection" style="padding:0 24px 18px;border-top:1px solid #1e2030;background:rgba(0,0,0,0.15);">
@@ -1994,7 +2001,7 @@ app.get('/dashboard', async (req, res) => {
                     <div class="exchange-card-sub" id="exSub1">-</div>
                     <div class="exchange-card-time" id="exTime1">-</div>
                 </div>
-                <div style="font-size:0.75rem;color:#555;">Warrior: <span id="exName1" style="color:#fff;"></span></div>
+                <div style="font-size:0.75rem;color:#555;">Trader: <span id="exName1" style="color:#fff;"></span></div>
             </div>
             <div style="display:flex;align-items:center;justify-content:center;padding:0 10px;font-size:2rem;color:#42a5f5;">&#8644;</div>
             <div class="exchange-side">
@@ -2004,7 +2011,7 @@ app.get('/dashboard', async (req, res) => {
                     <div class="exchange-card-sub" id="exSub2" style="color:#42a5f5;font-size:0.75rem;margin-top:6px;">Then click any shift on the timeline</div>
                     <div class="exchange-card-time" id="exTime2"></div>
                 </div>
-                <div style="font-size:0.75rem;color:#555;">Warrior: <span id="exName2" style="color:#fff;"></span></div>
+                <div style="font-size:0.75rem;color:#555;">Trader: <span id="exName2" style="color:#fff;"></span></div>
             </div>
         </div>
         <div class="exchange-footer">
@@ -2046,7 +2053,7 @@ app.get('/dashboard', async (req, res) => {
         </div>
         <div style="padding:16px 24px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <label style="font-size:0.72rem;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Select warriors to export</label>
+                <label style="font-size:0.72rem;color:#888;text-transform:uppercase;letter-spacing:0.5px;">Select traders to export</label>
                 <div style="display:flex;gap:8px;">
                     <button onclick="document.querySelectorAll('.export-cb').forEach(c=>c.checked=true);updateExportCount()" style="padding:4px 10px;background:rgba(76,175,80,0.1);color:#66bb6a;border:1px solid rgba(76,175,80,0.25);border-radius:5px;cursor:pointer;font-size:0.65rem;font-weight:600;">ALL</button>
                     <button onclick="document.querySelectorAll('.export-cb').forEach(c=>c.checked=false);updateExportCount()" style="padding:4px 10px;background:rgba(244,67,54,0.08);color:#e57373;border:1px solid rgba(244,67,54,0.2);border-radius:5px;cursor:pointer;font-size:0.65rem;font-weight:600;">NONE</button>
@@ -2106,7 +2113,7 @@ app.get('/dashboard', async (req, res) => {
             <button onclick="closeColorPicker()" style="background:none;border:none;color:#666;font-size:1.3rem;cursor:pointer;">&#10005;</button>
         </div>
         <div style="padding:16px 24px;">
-            <input type="text" id="colorSearch" placeholder="Search warrior..." oninput="renderColorList()" style="width:100%;padding:8px 10px;background:#0a0b0f;border:1px solid #1e2030;color:#ccc;border-radius:6px;margin-bottom:12px;box-sizing:border-box;font-size:0.8rem;outline:none;">
+            <input type="text" id="colorSearch" placeholder="Search trader..." oninput="renderColorList()" style="width:100%;padding:8px 10px;background:#0a0b0f;border:1px solid #1e2030;color:#ccc;border-radius:6px;margin-bottom:12px;box-sizing:border-box;font-size:0.8rem;outline:none;">
             <div id="colorList" style="max-height:400px;overflow-y:auto;"></div>
             <div style="display:flex;gap:10px;margin-top:14px;">
                 <button onclick="resetAllColors()" style="padding:8px 16px;background:rgba(244,67,54,0.08);color:#e57373;border:1px solid rgba(244,67,54,0.2);border-radius:6px;cursor:pointer;font-size:0.72rem;font-weight:600;">RESET ALL</button>
@@ -2302,8 +2309,11 @@ app.get('/dashboard', async (req, res) => {
         document.getElementById('mDeleteBtn').style.display = 'block';
         document.getElementById('mExchangeBtn').style.display = 'block';
         document.getElementById('mSplitBtn').style.display = 'block';
-        document.getElementById('mCrewBtn').style.display = 'block';
-        _crewMembers = []; renderCrewList();
+        // Populate extra traders from crew
+        const crewKey2 = date+'|'+product+'|'+start+'|'+end;
+        const crewAll2 = _crewMap[crewKey2] || [];
+        _extraTraders = crewAll2.filter(n => n !== name);
+        renderExtraTraders();
         document.getElementById('mMode').value='edit';
         document.getElementById('oName').value=name;
         document.getElementById('oDate').value=date;
@@ -2393,8 +2403,7 @@ app.get('/dashboard', async (req, res) => {
         document.getElementById('mExchangeBtn').style.display = 'none';
         document.getElementById('mSplitBtn').style.display = 'none';
         document.getElementById('mSplitSection').style.display = 'none';
-        document.getElementById('mCrewBtn').style.display = 'none';
-        document.getElementById('mCrewSection').style.display = 'none';
+        _extraTraders = []; renderExtraTraders();
         document.getElementById('mMode').value='add';
         updateProductDropdown();
         // Default to currently viewed date in dashboard, not today
@@ -2451,55 +2460,41 @@ app.get('/dashboard', async (req, res) => {
         const sec = document.getElementById('mSplitSection');
         const btn = document.getElementById('mSplitBtn');
         const isOpen = sec.style.display === 'none';
-        // Close cover if open
-        document.getElementById('mCrewSection').style.display = 'none';
-        document.getElementById('mCrewBtn').classList.remove('active');
-        document.getElementById('mCrewBtn').style.background='rgba(76,175,80,0.06)';
-        document.getElementById('mCrewBtn').style.borderColor='rgba(76,175,80,0.25)';
-        document.getElementById('mCrewBtn').style.color='#66bb6a';
         sec.style.display = isOpen ? 'block' : 'none';
         btn.style.background = isOpen ? 'rgba(91,127,166,0.2)' : 'rgba(66,165,245,0.06)';
         btn.style.borderColor = isOpen ? 'rgba(91,127,166,0.5)' : 'rgba(66,165,245,0.25)';
         btn.style.color = isOpen ? '#7ba3cc' : '#42a5f5';
         if(isOpen) _updateSplitPreview();
     }
-    let _crewMembers = [];
-    function toggleCrewMode(){
-        const sec = document.getElementById('mCrewSection');
-        const btn = document.getElementById('mCrewBtn');
-        const isOpen = sec.style.display === 'none';
-        document.getElementById('mSplitSection').style.display = 'none';
-        document.getElementById('mSplitBtn').style.background='rgba(66,165,245,0.06)';
-        document.getElementById('mSplitBtn').style.borderColor='rgba(66,165,245,0.25)';
-        document.getElementById('mSplitBtn').style.color='#42a5f5';
-        sec.style.display = isOpen ? 'block' : 'none';
-        if(isOpen){
-            btn.classList.add('active');
-            btn.style.background='rgba(76,175,80,0.2)';
-            btn.style.borderColor='rgba(76,175,80,0.5)';
-            btn.style.color='#81c784';
-        } else {
-            btn.classList.remove('active');
-            btn.style.background='rgba(76,175,80,0.06)';
-            btn.style.borderColor='rgba(76,175,80,0.25)';
-            btn.style.color='#66bb6a';
-        }
+    let _extraTraders = [];
+    function addExtraTrader(){
+        const mainName = document.getElementById('mName').value;
+        const allOpts = Array.from(document.getElementById('mName').options).map(o=>o.value);
+        // Pick first name not already used
+        const used = [mainName, ..._extraTraders];
+        const avail = allOpts.filter(n => !used.includes(n));
+        if (avail.length === 0) { alert('All traders already added'); return; }
+        _extraTraders.push(avail[0]);
+        renderExtraTraders();
     }
-    function addCrewMember(){
-        const sel=document.getElementById('crewAddSelect');
-        _crewMembers.push({name:sel.value,start:'',end:''});
-        renderCrewList();
-    }
-    function removeCrewMember(i){ _crewMembers.splice(i,1); renderCrewList(); }
-    function updateCrewTime(i,field,val){ _crewMembers[i][field]=val; }
-    function renderCrewList(){
-        const el=document.getElementById('crewList');
-        el.innerHTML=_crewMembers.map((m,i)=>'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;background:rgba(76,175,80,0.06);border:1px solid rgba(76,175,80,0.15);border-radius:6px;">'
-            +'<span style="font-size:0.78rem;font-weight:600;color:#81c784;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+m.name+'</span>'
-            +'<input type="time" value="'+(m.start||'')+'" onchange="updateCrewTime('+i+',\\\'start\\\',this.value)" style="width:75px;padding:3px 4px;background:#0a0b0f;border:1px solid #1e2030;color:#ccc;border-radius:4px;font-size:0.7rem;" placeholder="start">'
-            +'<input type="time" value="'+(m.end||'')+'" onchange="updateCrewTime('+i+',\\\'end\\\',this.value)" style="width:75px;padding:3px 4px;background:#0a0b0f;border:1px solid #1e2030;color:#ccc;border-radius:4px;font-size:0.7rem;" placeholder="end">'
-            +'<button onclick="removeCrewMember('+i+')" style="background:rgba(244,67,54,0.1);color:#e57373;border:1px solid rgba(244,67,54,0.2);border-radius:4px;cursor:pointer;padding:2px 7px;font-size:0.8rem;">&#10005;</button>'
-            +'</div>').join('');
+    function removeExtraTrader(i){ _extraTraders.splice(i,1); renderExtraTraders(); }
+    function changeExtraTrader(i, val){ _extraTraders[i] = val; renderExtraTraders(); }
+    function renderExtraTraders(){
+        const el = document.getElementById('mExtraTradersList');
+        const mainName = document.getElementById('mName').value;
+        const used = [mainName, ..._extraTraders];
+        el.innerHTML = _extraTraders.map((name,i) => {
+            const nc = pColors[name] || '#888';
+            return '<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;background:'+nc+'11;border:1px solid '+nc+'33;border-radius:6px;">'
+                +'<span style="width:8px;height:8px;border-radius:50%;background:'+nc+';flex-shrink:0;"></span>'
+                +'<select onchange="changeExtraTrader('+i+',this.value)" style="flex:1;padding:3px 6px;background:#0a0b0f;border:1px solid #1e2030;color:#ccc;border-radius:4px;font-size:0.75rem;">'
+                + Array.from(document.getElementById('mName').options).map(o =>
+                    '<option value="'+o.value+'"'+(o.value===name?' selected':'')+'>'+o.value+'</option>'
+                ).join('')
+                +'</select>'
+                +'<button onclick="removeExtraTrader('+i+')" style="background:rgba(244,67,54,0.1);color:#e57373;border:1px solid rgba(244,67,54,0.2);border-radius:4px;cursor:pointer;padding:2px 7px;font-size:0.8rem;">&#10005;</button>'
+                +'</div>';
+        }).join('');
     }
     function _timeToMins(t){ const [h,m]=(t||'00:00').split(':').map(Number); return h*60+m; }
     function _minsToTime(m){ m=((m%1440)+1440)%1440; return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
@@ -2531,10 +2526,9 @@ app.get('/dashboard', async (req, res) => {
         };
         // DoubleShift / Split mode
         const splitOpen = document.getElementById('mSplitSection').style.display !== 'none';
-        const coverOpen = document.getElementById('mCrewSection').style.display !== 'none';
         if (splitOpen) {
             const name2 = document.getElementById('mSplitName').value;
-            if (!name2) { alert('Select second warrior'); return; }
+            if (!name2) { alert('Select second trader'); return; }
             const sm = _timeToMins(data.start), em = _timeToMins(data.end);
             const dur = em > sm ? em - sm : 1440 - sm + em;
             const mid = _minsToTime(sm + Math.floor(dur / 2));
@@ -2546,19 +2540,14 @@ app.get('/dashboard', async (req, res) => {
                 fetch('/add-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(shift2)})
             ]);
             if (!r1.ok || !r2.ok) { alert('Error saving split shift'); return; }
-        } else if (coverOpen && _crewMembers.length > 0) {
+        } else if (_extraTraders.length > 0) {
             const url = mode === 'add' ? '/add-shift' : '/update-shift';
             const r1 = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
             if (!r1.ok) { alert('Error saving shift'); return; }
-            for (const m of _crewMembers) {
-                const crewData = {...data,
-                    name: m.name,
-                    start: (m.start && m.start.match(/^\\d{1,2}:\\d{2}$/)) ? m.start : data.start,
-                    end: (m.end && m.end.match(/^\\d{1,2}:\\d{2}$/)) ? m.end : data.end,
-                    note: data.note ? data.note + ' [Crew]' : 'Crew'
-                };
+            for (const tName of _extraTraders) {
+                const crewData = {...data, name: tName};
                 const r = await fetch('/add-shift', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(crewData)});
-                if (!r.ok) { alert('Error saving crew entry for ' + m.name); return; }
+                if (!r.ok) { alert('Error saving shift for ' + tName); return; }
             }
         } else {
             const resp = await fetch(mode==='add'?'/add-shift':'/update-shift',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
