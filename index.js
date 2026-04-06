@@ -1291,6 +1291,9 @@ app.get('/dashboard', async (req, res) => {
             // Datum den pred zacatkem tydne (pro nocni smeny ktere presly pres puldnoci)
             const prevWeekDay = new Date(startOfWeek); prevWeekDay.setDate(prevWeekDay.getDate() - 1);
             const prevWeekDayStr = toISOLocal(prevWeekDay);
+            // Datum den po konci tydne (pro smeny co se v Lima casu posunou na nedeli)
+            const nextWeekDay = new Date(startOfWeek); nextWeekDay.setDate(nextWeekDay.getDate() + 7);
+            const nextWeekDayStr = toISOLocal(nextWeekDay);
 
             peopleHierarchy.forEach(group => {
                 group.members.forEach(name => {
@@ -1330,6 +1333,23 @@ app.get('/dashboard', async (req, res) => {
                             }
                         });
                     }
+
+                    // Post-pass: shifts from next Monday that in Lima time start on Sunday (hidden, shown by tz toggle)
+                    allShifts.filter(s => s.Name === name && s.Date === nextWeekDayStr).forEach(s => {
+                        const startH = parseInt(s.Start.split(':')[0]);
+                        // Only shifts starting before 06:00 CET can appear on Sunday in Lima (-6h)
+                        if (startH < 6) {
+                            const prodColor = getProductColor(s.Trading, s.Product);
+                            // Render as hidden pill on day 7 (beyond visible week) — tz toggle will shift to day 6
+                            const sp = timeToPercent(s.Start);
+                            const ep = timeToPercent(s.End);
+                            const left = (7 * 100 / 7) + (sp / 7);
+                            const width = (ep - sp) / 7;
+                            const pill = buildPersonPill(s, name, nextWeekDayStr, 7, left, width, personColor, prodColor, 0);
+                            sHTML += pill.replace('style="', 'style="visibility:hidden;');
+                        }
+                    });
+
                     rHTML += '<div class="timeline-row hidden-row user-row" data-name="' + name + '">'
                            + '<div class="row-grid-bg">'
                            + '<div style="position:sticky;left:10px;top:4px;font-size:0.75rem;color:#555;font-weight:600;z-index:20;pointer-events:none;">'
@@ -1422,6 +1442,25 @@ app.get('/dashboard', async (req, res) => {
                             }
                         });
                     }
+
+                    // Post-pass: shifts from next Monday for Lima tz (hidden, shown by tz toggle)
+                    allShifts.filter(s => s.Product === pName && s.Date === nextWeekDayStr).forEach(s => {
+                        const prodKey = s.Date + '|' + s.Product + '|' + s.Start + '|' + s.End;
+                        if (renderedProdKeys.has(prodKey)) return;
+                        const startH = parseInt(s.Start.split(':')[0]);
+                        if (startH < 6) {
+                            renderedProdKeys.add(prodKey);
+                            const personColor = personColors[s.Name] || '#555';
+                            const prodColor = getProductColor(trading.name, pName);
+                            const sp = timeToPercent(s.Start);
+                            const ep = timeToPercent(s.End);
+                            const left = (7 * 100 / 7) + (sp / 7);
+                            const width = (ep - sp) / 7;
+                            const pill = buildProdPill(s, pName, nextWeekDayStr, 7, left, width, personColor, prodColor, 0);
+                            psHTML += pill.replace('style="', 'style="visibility:hidden;');
+                        }
+                    });
+
                     const pLabelColor = productColors[pName] || trading.color;
                     pRowsHTML += '<div class="timeline-row hidden-row product-row" data-product-row="' + pName + '">'
                                + '<div class="row-grid-bg">'
@@ -2839,12 +2878,15 @@ app.get('/dashboard', async (req, res) => {
     buildMiniCal();
 
     // Timezone toggle
-    let curTz='cet';
+    let curTz=localStorage.getItem('ygg_tz')||'cet';
     const LIMA=-6;
     function toggleTimezone(){
         curTz=curTz==='cet'?'lima':'cet';
+        localStorage.setItem('ygg_tz',curTz);
         const off=curTz==='lima'?LIMA:0;
         const btn=document.getElementById('tzToggle');
+        // Remove any timezone continuation clones from previous toggle
+        document.querySelectorAll('.tz-clone-pill').forEach(el=>el.remove());
         document.querySelectorAll('.shift-pill[data-orig-start]').forEach(pill=>{
             const od=parseInt(pill.dataset.origDay);
             const pp=parseInt(pill.dataset.pillPart||'0');
@@ -2878,11 +2920,42 @@ app.get('/dashboard', async (req, res) => {
                 const w2=ep2/7;
                 pill.style.left=left2+'%'; pill.style.width=Math.max(w2,0.3)+'%';
                 const te2=pill.querySelector('.pill-time');
-                if(te2){ const nh=Math.floor(nem/60),nm2=nem%60; te2.textContent=String(nh).padStart(2,'0')+':'+String(nm2).padStart(2,'0'); }
+                if(te2){
+                    const neH=String(Math.floor(nem/60)).padStart(2,'0'), neMin=String(nem%60).padStart(2,'0');
+                    te2.textContent='00:00 - '+neH+':'+neMin;
+                }
                 return;
             }
             const nd=od+dOff;
-            if(nd<0||nd>=7){pill.style.visibility='hidden';return;}
+            if(nd<0||nd>=7){
+                // If shift moved before week but is overnight and ends within the week, show the after-midnight part
+                if(nd===-1 && nsm>nem && nem>0){
+                    pill.style.visibility='visible';
+                    const epClip=(nem/1440)*100;
+                    pill.style.left='0%';
+                    pill.style.width=Math.max(epClip/7,0.3)+'%';
+                    const te=pill.querySelector('.pill-time');
+                    if(te){
+                        const neH=String(Math.floor(nem/60)).padStart(2,'0'),neMin=String(nem%60).padStart(2,'0');
+                        te.textContent='00:00 - '+neH+':'+neMin;
+                    }
+                    return;
+                }
+                // If shift moved past week end but is overnight and starts within the week, show start→midnight
+                if(nd===7 && nsm>nem && nem>0){
+                    pill.style.visibility='visible';
+                    const sp7=(nsm/1440)*100;
+                    pill.style.left=(6*100/7)+(sp7/7)+'%';
+                    pill.style.width=Math.max((100-sp7)/7,0.3)+'%';
+                    const te=pill.querySelector('.pill-time');
+                    if(te){
+                        const nsH=String(Math.floor(nsm/60)).padStart(2,'0'),nsMin=String(nsm%60).padStart(2,'0');
+                        te.textContent=nsH+':'+nsMin+' - 00:00';
+                    }
+                    return;
+                }
+                pill.style.visibility='hidden';return;
+            }
             pill.style.visibility='visible';
             const sp=(nsm/1440)*100, ep=(nem/1440)*100;
             const left=(nd*100/7)+(sp/7);
@@ -2899,11 +2972,38 @@ app.get('/dashboard', async (req, res) => {
                     w=(100-sp)/7;
                 }
             } else {
-                w=(ep-sp)/7; if(w<=0) w=(100-sp)/7;
+                // pp===0: normal pill
+                if(nsm > nem && nem > 0){
+                    // Became overnight in new tz — show start to midnight only
+                    w=(100-sp)/7;
+                    // Create continuation clone on next day (00:00 → end)
+                    if(nd < 6){
+                        const clone=pill.cloneNode(true);
+                        clone.classList.add('tz-clone-pill');
+                        clone.removeAttribute('data-orig-start');
+                        clone.style.left=((nd+1)*100/7)+'%';
+                        clone.style.width=Math.max(ep/7,0.3)+'%';
+                        clone.style.visibility='visible';
+                        const cte=clone.querySelector('.pill-time');
+                        if(cte){
+                            const neH=String(Math.floor(nem/60)).padStart(2,'0'),neMin=String(nem%60).padStart(2,'0');
+                            cte.textContent='00:00 - '+neH+':'+neMin;
+                        }
+                        pill.parentNode.appendChild(clone);
+                    }
+                } else {
+                    const effEp = nem === 0 ? 100 : ep;
+                    w=(effEp-sp)/7; if(w<=0) w=(100-sp)/7;
+                }
             }
             pill.style.left=left+'%'; pill.style.width=Math.max(w,0.3)+'%';
+            // Update pill time text: show start - end in new tz
             const te=pill.querySelector('.pill-time');
-            if(te){ const nh=Math.floor(nsm/60),nm=nsm%60; te.textContent=String(nh).padStart(2,'0')+':'+String(nm).padStart(2,'0'); }
+            if(te){
+                const nsH=String(Math.floor(nsm/60)).padStart(2,'0'), nsMin=String(nsm%60).padStart(2,'0');
+                const neH=String(Math.floor(nem/60)).padStart(2,'0'), neMin=String(nem%60).padStart(2,'0');
+                te.textContent=nsH+':'+nsMin+' - '+neH+':'+neMin;
+            }
         });
         if(curTz==='lima'){
             btn.classList.add('lima-active');
@@ -2956,6 +3056,12 @@ app.get('/dashboard', async (req, res) => {
         // Remove pre-filter style after filters are applied
         const pfs = document.getElementById('pre-filter-style');
         if (pfs) pfs.remove();
+
+        // Restore Lima timezone if it was active
+        if (localStorage.getItem('ygg_tz') === 'lima') {
+            curTz = 'cet'; // toggleTimezone will flip it to 'lima'
+            toggleTimezone();
+        }
 
         // Detekce překrývajících se směn - označ červeným blikáním
         const rows = document.querySelectorAll('.timeline-row');
@@ -3052,7 +3158,19 @@ app.get('/dashboard', async (req, res) => {
             + '<span style="width:10px;height:10px;border-radius:50%;background:'+pc+';flex-shrink:0;box-shadow:0 0 6px '+pc+'66;"></span>'
             + '<span style="font-weight:700;font-size:0.88rem;color:#e8eaf0;">'+name+'</span>'
             + '</div>';
-        document.getElementById('ttTime').textContent = start + ' \\u2013 ' + end;
+        // Show converted time when in Lima mode
+        let dispStart = start, dispEnd = end;
+        if (curTz === 'lima') {
+            function _convTime(t, off) {
+                const [h,m] = (t||'00:00').split(':').map(Number);
+                let mins = h*60+m+off*60;
+                while(mins<0) mins+=1440; while(mins>=1440) mins-=1440;
+                return String(Math.floor(mins/60)).padStart(2,'0')+':'+String(mins%60).padStart(2,'0');
+            }
+            dispStart = _convTime(start, LIMA);
+            dispEnd = _convTime(end, LIMA);
+        }
+        document.getElementById('ttTime').textContent = dispStart + ' \\u2013 ' + dispEnd;
         document.getElementById('ttProduct').innerHTML =
             '<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+prodColor+';margin-right:5px;vertical-align:middle;"></span>'
             + trading + ' \\u203a ' + product;
