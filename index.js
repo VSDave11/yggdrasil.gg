@@ -1037,6 +1037,8 @@ app.get('/dashboard', async (req, res) => {
             console.log('Cache HIT - pouzivam ulozena data (' + allShifts.length + ' smen)');
         } else {
             console.log('Cache MISS - nacitam z Google Sheets...');
+            // Force sync clears hidden sheets so deleted months can be re-synced
+            if (forceSync) _hiddenSheets.clear();
             await doc.loadInfo();
 
         // 1. SYNC Z PLANNERU - cte vsechny listy "Schedule - *"
@@ -1085,12 +1087,15 @@ app.get('/dashboard', async (req, res) => {
         const allSheetTitles = Object.keys(doc.sheetsByTitle);
         const scheduleSheets = allSheetTitles.filter(t => t.startsWith('Schedule -') && !_hiddenSheets.has(t));
 
+        console.log('[SYNC] Found schedule sheets:', scheduleSheets);
+        console.log('[SYNC] Hidden sheets:', [..._hiddenSheets]);
         for (const sheetTitle of scheduleSheets) {
             const sheet = doc.sheetsByTitle[sheetTitle];
-            if (!sheet) continue;
+            if (!sheet) { console.log('[SYNC] Sheet not found in doc:', sheetTitle); continue; }
             try {
                 // loadCells nevyzaduje hlavicku - cte primo bunky
                 await sheet.loadCells('A1:AQ500');
+                let sheetShiftCount = 0;
                 for (let r = 0; r < Math.min(sheet.rowCount, 500); r++) {
                     const dateCell = sheet.getCell(r, 0);
                     // Zkus formattedValue (napr "6.4.2026") i value (napr 46118)
@@ -1114,18 +1119,19 @@ app.get('/dashboard', async (req, res) => {
                                 }
                                 val.split(',').forEach(n => {
                                     const name = n.trim();
-                                    if (name) allShifts.push({
+                                    if (name) { sheetShiftCount++; allShifts.push({
                                         Date: shiftDate, Name: name,
                                         Trading: pm.trading, Product: pm.name,
                                         Start: slot.s, End: slot.e, Note: "",
                                         // Uloz zdroj pro moznost smazani
                                         _sheet: sheetTitle, _row: r, _col: col
-                                    });
+                                    }); }
                                 });
                             }
                         });
                     });
                 }
+                console.log('[SYNC] Sheet "' + sheetTitle + '": loaded ' + sheetShiftCount + ' shifts');
             } catch (sheetErr) {
                 console.error('Chyba pri cteni listu ' + sheetTitle + ':', sheetErr.message);
             }
