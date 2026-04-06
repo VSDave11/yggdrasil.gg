@@ -948,18 +948,49 @@ app.post('/delete-month', async (req, res) => {
     const { sheetTitle } = req.body;
     if (!sheetTitle) return res.status(400).send('Missing sheetTitle');
     try {
-        // Smaz smeny daneho mesice z cache (ne ze sheetu!)
-        // Pokud cache neexistuje, pridej sheetTitle do blacklistu
-        if (!_hiddenSheets) _hiddenSheets = new Set();
-        _hiddenSheets.add(sheetTitle);
-        if (_shiftsCache) {
-            _shiftsCache = _shiftsCache.filter(s => s._sheet !== sheetTitle);
-            _shiftsCacheTime = Date.now();
+        // Parse month/year from sheetTitle like "Schedule - May 2026"
+        const monthNames = {'January':1,'February':2,'March':3,'April':4,'May':5,'June':6,'July':7,'August':8,'September':9,'October':10,'November':11,'December':12};
+        const m = sheetTitle.match(/Schedule\s*-\s*(\w+)\s+(\d{4})/);
+        if (!m) return res.status(400).send('Cannot parse month from: ' + sheetTitle);
+        const targetMonth = monthNames[m[1]];
+        const targetYear = parseInt(m[2]);
+        if (!targetMonth) return res.status(400).send('Unknown month: ' + m[1]);
+
+        // Delete matching rows from ManualShifts
+        await doc.loadInfo();
+        const manualSheet = doc.sheetsByTitle['ManualShifts'];
+        let deletedCount = 0;
+        if (manualSheet) {
+            await manualSheet.loadCells('A1:Z500');
+            let mColDate = -1;
+            for (let c = 0; c < 10; c++) {
+                if (manualSheet.getCell(0, c).value?.toString().trim().toLowerCase() === 'date') { mColDate = c; break; }
+            }
+            if (mColDate >= 0) {
+                // Collect rows to delete (bottom-up to avoid index shifting)
+                const rows = await manualSheet.getRows();
+                const toDelete = [];
+                for (let i = 0; i < rows.length; i++) {
+                    const rawD = manualSheet.getCell(i + 1, mColDate).value;
+                    const d = convertCzechDate(rawD);
+                    if (!d) continue;
+                    const [y, mo] = d.split('-').map(Number);
+                    if (y === targetYear && mo === targetMonth) toDelete.push(i);
+                }
+                // Delete bottom-up
+                for (let i = toDelete.length - 1; i >= 0; i--) {
+                    await rows[toDelete[i]].delete();
+                    deletedCount++;
+                }
+            }
         }
+
+        // Invalidate cache
+        _shiftsCache = null;
+        _shiftsCacheTime = 0;
 
         // AuditLog
         try {
-            await doc.loadInfo();
             const auditSheet = doc.sheetsByTitle['AuditLog'];
             if (auditSheet) {
                 await auditSheet.addRow({
@@ -968,12 +999,12 @@ app.post('/delete-month', async (req, res) => {
                     Email: req.user.email,
                     Role: req.user.role,
                     Location: req.user.location || '',
-                    Action: 'HIDE_MONTH: ' + sheetTitle + ' (cache cleared, sheet untouched)'
+                    Action: 'DELETE_MONTH_MANUAL: ' + sheetTitle + ' (' + deletedCount + ' rows deleted from ManualShifts)'
                 });
             }
         } catch(e) {}
 
-        res.json({ success: true, info: 'Cache cleared - shifts hidden from dashboard, sheet untouched' });
+        res.json({ success: true, deleted: deletedCount, info: deletedCount + ' manual shifts deleted for ' + m[1] + ' ' + targetYear });
     } catch(e) { res.status(500).send(e.message); }
 });
 
