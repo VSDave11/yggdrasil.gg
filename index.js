@@ -1908,10 +1908,9 @@ app.get('/dashboard', async (req, res) => {
             .sidebar{display:none!important;}
             .mobile-menu-btn{display:flex!important;}
             .sidebar.mobile-open{display:flex!important;position:fixed;left:0;top:0;width:280px;height:100vh;z-index:999;box-shadow:4px 0 32px rgba(0,0,0,0.7);}
-            /* Main — na mobilu scroll POUZE pro list view, aby sticky topbar fungoval */
-            .main-view-list{overflow-y:auto!important;-webkit-overflow-scrolling:touch;}
-            /* Topbar — fixni na vrchu, nikdy nezmizi */
-            .topbar-main{padding:6px 8px!important;position:sticky!important;top:0!important;z-index:100!important;flex-shrink:0!important;min-height:40px!important;}
+            /* Topbar — position:fixed, vždy nahoře */
+            .topbar-main{position:fixed!important;top:0!important;left:0!important;right:0!important;z-index:100!important;padding:8px 10px!important;min-height:44px!important;box-sizing:border-box!important;}
+            .main-content{padding-top:44px!important;}
             .topbar-left{gap:6px!important;}
             .topbar-right{gap:4px!important;}
             .topbar-right .month-label{display:none!important;}
@@ -1941,10 +1940,8 @@ app.get('/dashboard', async (req, res) => {
             .sidebar-logout-btn{display:block!important;}
             /* Week view na mobilu — horizontální scroll */
             .week-wrapper{overflow-x:auto!important;-webkit-overflow-scrolling:touch;}
-            /* List view na mobilu — main scrolluje, ne viewport */
-            .list-viewport{padding:0!important;overflow:visible!important;}
-            .list-wrapper{overflow:visible!important;}
-            .list-week-header{top:40px!important;}
+            /* List view na mobilu */
+            .list-viewport{padding:0!important;}
             /* Agenda na mobilu */
             #agendaViewport .user-row{gap:6px!important;padding:6px 8px!important;}
         }
@@ -1952,7 +1949,6 @@ app.get('/dashboard', async (req, res) => {
             .view-toggle-bar button{padding:4px 5px!important;font-size:0.55rem!important;}
             .shift-pill{font-size:0.55rem!important;padding:0 4px!important;}
             .mobile-user-compact span{display:none!important;}
-            .list-viewport{padding:0!important;}
         }
         .mobile-menu-btn{display:none;background:#000;border:1px solid #333;color:#fbc02d;padding:8px 12px;border-radius:6px;cursor:pointer;font-size:1.1rem;align-items:center;}
         .sidebar-logout-btn{display:none;}
@@ -2247,7 +2243,7 @@ app.get('/dashboard', async (req, res) => {
         </div>
     </aside>
 
-    <main class="main-content main-view-${view}" style="display:flex;flex-direction:column;overflow:hidden;background:#fafafa;">
+    <main class="main-content" style="display:flex;flex-direction:column;overflow:hidden;background:#fafafa;">
         <div class="topbar-main" style="padding:10px 20px;border-bottom:1px solid #1e2030;display:flex;justify-content:space-between;align-items:center;background:#0d0e14;">
             <div class="topbar-left" style="display:flex;align-items:center;gap:10px;">
                 <!-- BOD 1: Mobilni menu tlacitko -->
@@ -3650,6 +3646,7 @@ app.get('/dashboard', async (req, res) => {
 
     // BOD 2: Scroll vždy na začátek = Pondělí
     window.onload=()=>{
+        if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
         loadSharedColors(()=>{ applyCustomColorsToDOM(); });
         // Clean up warp arrival overlay + remove ?warp=1 from URL
         const wa = document.getElementById('warpArrival');
@@ -3726,9 +3723,8 @@ app.get('/dashboard', async (req, res) => {
                 if(typeof applyAllFilters==='function') applyAllFilters();
             }
             if(window.innerWidth<=768){
-                const _sc=document.querySelector('.main-content')||_lv;
-                _sc.addEventListener('scroll',function(){
-                    if(_sc.scrollTop+_sc.clientHeight>=_sc.scrollHeight-200) _appendWeek();
+                _lv.addEventListener('scroll',function(){
+                    if(_lv.scrollTop+_lv.clientHeight>=_lv.scrollHeight-200) _appendWeek();
                 });
             }
         }
