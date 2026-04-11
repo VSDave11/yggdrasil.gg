@@ -1767,7 +1767,7 @@ app.get('/dashboard', async (req, res) => {
                     const wkEnd = new Date(wkStart); wkEnd.setDate(wkStart.getDate() + 6);
                     const wn = getISOWeek(date);
                     const isCurrentWeek = toISOLocal(wkStart) === toISOLocal(startOfWeek);
-                    h += '<div id="' + (isCurrentWeek ? 'listCurrentWeek' : '') + '" style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:#eef0f4;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:5;">'
+                    h += '<div class="list-week-header" id="' + (isCurrentWeek ? 'listCurrentWeek' : '') + '" style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:#eef0f4;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:5;">'
                        + '<span style="font-size:0.8rem;font-weight:600;color:#666;">' + fmtD(wkStart) + ' &ndash; ' + fmtD(wkEnd) + '</span>'
                        + '<span style="font-size:0.75rem;font-weight:700;color:#999;">Week ' + wn + '</span>'
                        + '</div>';
@@ -1908,8 +1908,10 @@ app.get('/dashboard', async (req, res) => {
             .sidebar{display:none!important;}
             .mobile-menu-btn{display:flex!important;}
             .sidebar.mobile-open{display:flex!important;position:fixed;left:0;top:0;width:280px;height:100vh;z-index:999;box-shadow:4px 0 32px rgba(0,0,0,0.7);}
-            /* Topbar — jedna řada, kompaktní */
-            .topbar-main{padding:6px 8px!important;}
+            /* Main — na mobilu scroll, aby sticky topbar fungoval */
+            .main-content{overflow-y:auto!important;-webkit-overflow-scrolling:touch;}
+            /* Topbar — fixni na vrchu, nikdy nezmizi */
+            .topbar-main{padding:6px 8px!important;position:sticky!important;top:0!important;z-index:100!important;flex-shrink:0!important;min-height:40px!important;}
             .topbar-left{gap:6px!important;}
             .topbar-right{gap:4px!important;}
             .topbar-right .month-label{display:none!important;}
@@ -1939,8 +1941,10 @@ app.get('/dashboard', async (req, res) => {
             .sidebar-logout-btn{display:block!important;}
             /* Week view na mobilu — horizontální scroll */
             .week-wrapper{overflow-x:auto!important;-webkit-overflow-scrolling:touch;}
-            /* List view na mobilu */
-            .list-viewport{padding:0!important;}
+            /* List view na mobilu — main scrolluje, ne viewport */
+            .list-viewport{padding:0!important;overflow:visible!important;}
+            .list-wrapper{overflow:visible!important;}
+            .list-week-header{top:40px!important;}
             /* Agenda na mobilu */
             #agendaViewport .user-row{gap:6px!important;padding:6px 8px!important;}
         }
@@ -2243,7 +2247,7 @@ app.get('/dashboard', async (req, res) => {
         </div>
     </aside>
 
-    <main style="display:flex;flex-direction:column;overflow:hidden;background:#fafafa;">
+    <main class="main-content" style="display:flex;flex-direction:column;overflow:hidden;background:#fafafa;">
         <div class="topbar-main" style="padding:10px 20px;border-bottom:1px solid #1e2030;display:flex;justify-content:space-between;align-items:center;background:#0d0e14;">
             <div class="topbar-left" style="display:flex;align-items:center;gap:10px;">
                 <!-- BOD 1: Mobilni menu tlacitko -->
@@ -3693,7 +3697,7 @@ app.get('/dashboard', async (req, res) => {
                     if(dow===1||(d===start&&dow!==1)){
                         const ws=new Date(dt);if(dow!==1)ws.setDate(ws.getDate()-(dow===0?6:dow-1));
                         const we=new Date(ws);we.setDate(ws.getDate()+6);
-                        h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:#eef0f4;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:5;">'
+                        h+='<div class="list-week-header" style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:#eef0f4;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:5;">'
                           +'<span style="font-size:0.8rem;font-weight:600;color:#666;">'+_fmtD(ws)+' &ndash; '+_fmtD(we)+'</span>'
                           +'<span style="font-size:0.75rem;font-weight:700;color:#999;">Week '+_getWk(dt)+'</span></div>';
                     }
@@ -3722,8 +3726,9 @@ app.get('/dashboard', async (req, res) => {
                 if(typeof applyAllFilters==='function') applyAllFilters();
             }
             if(window.innerWidth<=768){
-                _lv.addEventListener('scroll',function(){
-                    if(_lv.scrollTop+_lv.clientHeight>=_lv.scrollHeight-200) _appendWeek();
+                const _sc=document.querySelector('.main-content')||_lv;
+                _sc.addEventListener('scroll',function(){
+                    if(_sc.scrollTop+_sc.clientHeight>=_sc.scrollHeight-200) _appendWeek();
                 });
             }
         }
