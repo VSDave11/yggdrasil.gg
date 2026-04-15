@@ -1316,8 +1316,8 @@ app.get('/stats', async (req, res) => {
     const isTL = peopleHierarchy.find(g => g.label === 'Team Leaders')?.members.includes(req.user.jmeno);
     const canSeeAll = isAdmin || isTL;
 
-    // Period handling
-    const period = req.query.period || 'week';
+    // Period handling — default is month
+    const period = req.query.period || 'month';
     const anchorDate = req.query.date ? new Date(req.query.date) : new Date();
     let periodStart, periodEnd, periodLabel;
 
@@ -1359,6 +1359,23 @@ app.get('/stats', async (req, res) => {
 
     try {
         const allShifts = await loadAllShifts(false);
+
+        // Build available months from shift data for month picker
+        const monthSet = new Set();
+        allShifts.forEach(s => {
+            if (s.Date && s.Date.length >= 7) monthSet.add(s.Date.slice(0, 7));
+        });
+        const availableMonths = [...monthSet].sort();
+        const currentMonthKey = anchorDate.getFullYear() + '-' + String(anchorDate.getMonth() + 1).padStart(2, '0');
+
+        let monthOptionsHTML = '';
+        availableMonths.forEach(m => {
+            const [y, mo] = m.split('-');
+            const d = new Date(parseInt(y), parseInt(mo) - 1, 1);
+            const label = d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+            const sel = (period === 'month' && m === currentMonthKey) ? ' selected' : '';
+            monthOptionsHTML += '<option value="' + m + '"' + sel + '>' + label + '</option>';
+        });
 
         // Lima members set
         const limaGroup = peopleHierarchy.find(g => g.label === 'Traders - Lima');
@@ -1533,6 +1550,9 @@ td{border-bottom:1px solid #0d0e14;}
 .custom-range{display:none;align-items:center;gap:8px;margin-top:6px;}
 .custom-range input[type=date]{padding:5px 10px;background:#0e1621;border:1px solid #1e2d3d;border-radius:6px;color:#c8d0e0;font-size:0.78rem;font-family:'Montserrat';}
 .custom-range button{padding:5px 14px;background:rgba(251,192,45,0.1);border:1px solid rgba(251,192,45,0.3);border-radius:6px;color:#fbc02d;font-weight:700;font-size:0.72rem;cursor:pointer;font-family:'Oswald';letter-spacing:0.5px;}
+.period-tabs{display:flex;gap:4px;}
+.month-select{padding:5px 10px;background:#0e1621;border:1px solid #1e2d3d;border-radius:6px;color:#fbc02d;font-size:0.82rem;font-weight:600;font-family:'Oswald';letter-spacing:0.5px;cursor:pointer;min-width:150px;text-align:center;}
+.month-select option{background:#0e1621;color:#c8d0e0;}
 @media(max-width:768px){
     .stats-topbar{padding:10px 14px;}
     .stats-title{font-size:1.1rem;}
@@ -1556,12 +1576,14 @@ td{border-bottom:1px solid #0d0e14;}
         <span class="stats-title">STATISTICS</span>
     </div>
     <div class="stats-topbar-right">
-        <button class="period-btn ${period==='week'?'active':''}" onclick="switchPeriod('week')">WEEK</button>
-        <button class="period-btn ${period==='month'?'active':''}" onclick="switchPeriod('month')">MONTH</button>
-        <button class="period-btn ${period==='custom'?'active':''}" onclick="showCustomRange()">CUSTOM</button>
+        <div class="period-tabs">
+            <button class="period-btn ${period==='month'?'active':''}" onclick="switchPeriod('month')">MONTH</button>
+            <button class="period-btn ${period==='week'?'active':''}" onclick="switchPeriod('week')">WEEK</button>
+            <button class="period-btn ${period==='custom'?'active':''}" onclick="showCustomRange()">CUSTOM</button>
+        </div>
         <div class="nav-row">
             <a href="/stats?period=${period}&date=${prevDate}" class="nav-arrow">&larr;</a>
-            <span class="period-label">${periodLabel}</span>
+            ${period === 'month' ? '<select class="month-select" onchange="jumpToMonth(this.value)">' + monthOptionsHTML + '</select>' : '<span class="period-label">' + periodLabel + '</span>'}
             <a href="/stats?period=${period}&date=${nextDate}" class="nav-arrow">&rarr;</a>
         </div>
         <div class="custom-range" id="customRange">
@@ -1619,6 +1641,9 @@ function switchPeriod(p) {
     u.searchParams.delete('to');
     if (p !== 'custom') u.searchParams.delete('date');
     location.href = u;
+}
+function jumpToMonth(val) {
+    location.href = '/stats?period=month&date=' + val + '-01';
 }
 function showCustomRange() {
     var cr = document.getElementById('customRange');
