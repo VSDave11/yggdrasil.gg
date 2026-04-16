@@ -1377,34 +1377,17 @@ app.get('/stats', async (req, res) => {
             monthOptionsHTML += '<option value="' + m + '"' + sel + '>' + label + '</option>';
         });
 
-        // Lima members set
-        const limaGroup = peopleHierarchy.find(g => g.label === 'Traders - Lima');
-        const limaMembers = new Set(limaGroup ? limaGroup.members : []);
-
-        // Classify a shift: isWeekend, isNight, isRIP, isVacation
+        // Classify shift type by start hour (CET times from schedule)
+        // Morning: start 7-8, Afternoon: start 15-16, Night: start 23 or 0
         function classifyShift(shift) {
-            const isLima = limaMembers.has(shift.Name);
-            let startH = parseInt(shift.Start.split(':')[0]);
-            let endH = parseInt(shift.End.split(':')[0]);
-            let startM = parseInt(shift.Start.split(':')[1]) || 0;
-            let endM = parseInt(shift.End.split(':')[1]) || 0;
-            let shiftDate = new Date(shift.Date + 'T12:00:00');
-
-            if (isLima) {
-                startH -= 6; endH -= 6;
-                if (startH < 0) { startH += 24; shiftDate.setDate(shiftDate.getDate() - 1); }
-                if (endH < 0) endH += 24;
-            }
-
-            const dow = shiftDate.getDay();
-            const isWeekend = (dow === 0 || dow === 6);
-            const startMin = startH * 60 + startM;
-            const endMin = endH * 60 + endM;
-            const isOvernight = startMin > endMin;
+            const startH = parseInt(shift.Start.split(':')[0]);
+            let shiftType = 'other';
+            if (startH === 7 || startH === 8) shiftType = 'morning';
+            else if (startH === 15 || startH === 16) shiftType = 'afternoon';
+            else if (startH === 23 || startH === 0) shiftType = 'night';
 
             return {
-                isWeekend,
-                isNight: isOvernight && !isWeekend,
+                shiftType,
                 isRIP: shift.Product === 'RIP',
                 isVacation: shift.Product === 'Vacation'
             };
@@ -1431,8 +1414,9 @@ app.get('/stats', async (req, res) => {
                     totalHours: 0,
                     ripCount: 0,
                     vacationCount: 0,
+                    morningCount: 0,
+                    afternoonCount: 0,
                     nightCount: 0,
-                    weekendCount: 0,
                     totalShifts: 0
                 };
             });
@@ -1451,8 +1435,9 @@ app.get('/stats', async (req, res) => {
 
             stats.totalHours += calculateDuration(s.Start, s.End);
             stats.totalShifts++;
-            if (cls.isWeekend) stats.weekendCount++;
-            else if (cls.isNight) stats.nightCount++;
+            if (cls.shiftType === 'morning') stats.morningCount++;
+            else if (cls.shiftType === 'afternoon') stats.afternoonCount++;
+            else if (cls.shiftType === 'night') stats.nightCount++;
         });
 
         // Convert to sorted array
@@ -1462,8 +1447,9 @@ app.get('/stats', async (req, res) => {
         // Summary totals
         const sumHours = Math.round(statsArr.reduce((a,b) => a + b.totalHours, 0) * 10) / 10;
         const sumRIP = statsArr.reduce((a,b) => a + b.ripCount, 0);
+        const sumMorning = statsArr.reduce((a,b) => a + b.morningCount, 0);
+        const sumAfternoon = statsArr.reduce((a,b) => a + b.afternoonCount, 0);
         const sumNight = statsArr.reduce((a,b) => a + b.nightCount, 0);
-        const sumWeekend = statsArr.reduce((a,b) => a + b.weekendCount, 0);
         const maxHours = statsArr.length > 0 ? Math.max(...statsArr.map(s => s.totalHours)) : 1;
 
         // Group people for table sections
@@ -1482,7 +1468,7 @@ app.get('/stats', async (req, res) => {
         sortedByGroup.forEach(s => {
             if (s.group !== currentGroup) {
                 currentGroup = s.group;
-                tableRowsHTML += '<tr class="group-header" data-group="' + currentGroup.replace(/"/g,'&quot;') + '" style="cursor:pointer;" onclick="toggleGroup(this)"><td colspan="9" style="padding:10px 14px;font-weight:700;font-family:Oswald;font-size:0.85rem;color:' + s.groupColor + ';letter-spacing:1px;border-bottom:1px solid #1e2030;background:#0a0b10;">' + currentGroup.toUpperCase() + ' <span style="font-size:0.7rem;color:#3a4050;margin-left:6px;">&#9660;</span></td></tr>';
+                tableRowsHTML += '<tr class="group-header" data-group="' + currentGroup.replace(/"/g,'&quot;') + '" style="cursor:pointer;" onclick="toggleGroup(this)"><td colspan="10" style="padding:10px 14px;font-weight:700;font-family:Oswald;font-size:0.85rem;color:' + s.groupColor + ';letter-spacing:1px;border-bottom:1px solid #1e2030;background:#0a0b10;">' + currentGroup.toUpperCase() + ' <span style="font-size:0.7rem;color:#3a4050;margin-left:6px;">&#9660;</span></td></tr>';
             }
             const pct = s.targetPeriod > 0 ? Math.round((s.totalHours / s.targetPeriod) * 100) : (s.totalHours > 0 ? 999 : 0);
             const barW = s.targetPeriod > 0 ? Math.min(100, pct) : (s.totalHours > 0 ? 100 : 0);
@@ -1494,8 +1480,9 @@ app.get('/stats', async (req, res) => {
             tableRowsHTML += '<td style="padding:8px 10px;text-align:right;color:#4a5060;font-size:0.78rem;">' + s.targetPeriod.toFixed(0) + 'h</td>';
             tableRowsHTML += '<td style="padding:8px 10px;min-width:100px;"><div style="background:#1a1c28;border-radius:4px;height:16px;overflow:hidden;position:relative;"><div style="width:' + barW + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.5s;"></div><span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:0.6rem;font-weight:700;color:#c8d0e0;">' + pct + '%</span></div></td>';
             tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#ef5350;font-weight:600;font-size:0.8rem;">' + (s.ripCount || '–') + '</td>';
+            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#ffa726;font-weight:600;font-size:0.8rem;">' + (s.morningCount || '–') + '</td>';
+            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#42a5f5;font-weight:600;font-size:0.8rem;">' + (s.afternoonCount || '–') + '</td>';
             tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#7c4dff;font-weight:600;font-size:0.8rem;">' + (s.nightCount || '–') + '</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#ffa726;font-weight:600;font-size:0.8rem;">' + (s.weekendCount || '–') + '</td>';
             tableRowsHTML += '<td class="col-total" style="padding:8px 10px;text-align:center;color:#4a5060;font-size:0.78rem;">' + s.totalShifts + '</td>';
             tableRowsHTML += '</tr>';
         });
@@ -1535,7 +1522,7 @@ body{background:#0d0e14;color:#c8d0e0;font-family:'Montserrat',sans-serif;min-he
 .nav-arrow:hover{border-color:rgba(91,127,166,0.5);color:#7ba3cc;}
 .period-label{font-size:0.82rem;color:#8892a4;font-weight:600;min-width:160px;text-align:center;}
 .stats-container{max-width:1200px;margin:0 auto;padding:20px;}
-.summary-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px;}
+.summary-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:24px;}
 .summary-card{background:#13151e;border:1px solid #1e2030;border-radius:12px;padding:20px;text-align:center;}
 .summary-card .val{font-family:'Oswald';font-size:2rem;font-weight:700;margin-bottom:4px;}
 .summary-card .lbl{font-size:0.7rem;color:#4a5060;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
@@ -1598,9 +1585,10 @@ td{border-bottom:1px solid #0d0e14;}
 <div class="stats-container">
     <div class="summary-cards">
         <div class="summary-card"><div class="val" style="color:#4caf50;">${sumHours}</div><div class="lbl">Total Hours</div></div>
-        <div class="summary-card"><div class="val" style="color:#ef5350;">${sumRIP}</div><div class="lbl">RIP Shifts</div></div>
-        <div class="summary-card"><div class="val" style="color:#7c4dff;">${sumNight}</div><div class="lbl">Night Shifts</div></div>
-        <div class="summary-card"><div class="val" style="color:#ffa726;">${sumWeekend}</div><div class="lbl">Weekend Shifts</div></div>
+        <div class="summary-card"><div class="val" style="color:#ef5350;">${sumRIP}</div><div class="lbl">RIP</div></div>
+        <div class="summary-card"><div class="val" style="color:#ffa726;">${sumMorning}</div><div class="lbl">Morning</div></div>
+        <div class="summary-card"><div class="val" style="color:#42a5f5;">${sumAfternoon}</div><div class="lbl">Afternoon</div></div>
+        <div class="summary-card"><div class="val" style="color:#7c4dff;">${sumNight}</div><div class="lbl">Night</div></div>
     </div>
 
     <div class="stats-section">
@@ -1614,9 +1602,10 @@ td{border-bottom:1px solid #0d0e14;}
                 <th onclick="sortTable(3,'num')" style="text-align:right;">Target</th>
                 <th>Progress</th>
                 <th onclick="sortTable(5,'num')" style="text-align:center;">RIP</th>
-                <th onclick="sortTable(6,'num')" style="text-align:center;">Night</th>
-                <th onclick="sortTable(7,'num')" style="text-align:center;">Wknd</th>
-                <th class="col-total" onclick="sortTable(8,'num')" style="text-align:center;">Total</th>
+                <th onclick="sortTable(6,'num')" style="text-align:center;">Morning</th>
+                <th onclick="sortTable(7,'num')" style="text-align:center;">Afternoon</th>
+                <th onclick="sortTable(8,'num')" style="text-align:center;">Night</th>
+                <th class="col-total" onclick="sortTable(9,'num')" style="text-align:center;">Total</th>
             </tr></thead>
             <tbody id="statsBody">
                 ${tableRowsHTML}
