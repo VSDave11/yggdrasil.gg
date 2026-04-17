@@ -1316,6 +1316,11 @@ app.get('/stats', async (req, res) => {
     const isTL = peopleHierarchy.find(g => g.label === 'Team Leaders')?.members.includes(req.user.jmeno);
     const canSeeAll = isAdmin || isTL;
 
+    // Selected person — if no query, non-admin sees themselves
+    let selectedPerson = req.query.person || (canSeeAll ? null : req.user.jmeno);
+    // Block non-admins from seeing others
+    if (!canSeeAll && selectedPerson !== req.user.jmeno) selectedPerson = req.user.jmeno;
+
     // Period handling — default is month
     const period = req.query.period || 'month';
     const anchorDate = req.query.date ? new Date(req.query.date) : new Date();
@@ -1330,9 +1335,9 @@ app.get('/stats', async (req, res) => {
         periodStart = new Date(req.query.from);
         periodEnd = new Date(req.query.to);
         periodEnd.setHours(23,59,59,999);
-        periodLabel = periodStart.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) + ' – ' + periodEnd.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+        periodLabel = periodStart.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) + ' &ndash; ' + periodEnd.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
     } else {
-        // week (default)
+        // week
         periodStart = new Date(anchorDate);
         const dayIdx = periodStart.getDay() || 7;
         periodStart.setHours(0,0,0,0);
@@ -1340,7 +1345,7 @@ app.get('/stats', async (req, res) => {
         periodEnd = new Date(periodStart);
         periodEnd.setDate(periodEnd.getDate() + 6);
         periodEnd.setHours(23,59,59,999);
-        periodLabel = periodStart.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) + ' – ' + periodEnd.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+        periodLabel = periodStart.toLocaleDateString('en-GB', { day:'numeric', month:'short' }) + ' &ndash; ' + periodEnd.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
     }
 
     // Navigation URLs
@@ -1360,14 +1365,13 @@ app.get('/stats', async (req, res) => {
     try {
         const allShifts = await loadAllShifts(false);
 
-        // Build available months from shift data for month picker
+        // Build month options for dropdown
         const monthSet = new Set();
-        allShifts.forEach(s => {
-            if (s.Date && s.Date.length >= 7) monthSet.add(s.Date.slice(0, 7));
-        });
+        allShifts.forEach(s => { if (s.Date && s.Date.length >= 7) monthSet.add(s.Date.slice(0, 7)); });
+        // Ensure current month is always available
+        monthSet.add(anchorDate.getFullYear() + '-' + String(anchorDate.getMonth() + 1).padStart(2, '0'));
         const availableMonths = [...monthSet].sort();
         const currentMonthKey = anchorDate.getFullYear() + '-' + String(anchorDate.getMonth() + 1).padStart(2, '0');
-
         let monthOptionsHTML = '';
         availableMonths.forEach(m => {
             const [y, mo] = m.split('-');
@@ -1377,62 +1381,44 @@ app.get('/stats', async (req, res) => {
             monthOptionsHTML += '<option value="' + m + '"' + sel + '>' + label + '</option>';
         });
 
-        // Classify shift type by start hour (CET times from schedule)
-        // Morning: start 7-8, Afternoon: start 15-16, Night: start 23 or 0
+        // Classify shift type by start hour
         function classifyShift(shift) {
             const startH = parseInt(shift.Start.split(':')[0]);
             let shiftType = 'other';
             if (startH === 7 || startH === 8) shiftType = 'morning';
             else if (startH === 15 || startH === 16) shiftType = 'afternoon';
             else if (startH === 23 || startH === 0) shiftType = 'night';
-
-            return {
-                shiftType,
-                isRIP: shift.Product === 'RIP',
-                isVacation: shift.Product === 'Vacation'
-            };
+            return { shiftType, isRIP: shift.Product === 'RIP', isVacation: shift.Product === 'Vacation' };
         }
 
-        // Compute number of weeks in period for target calculation
         const periodDays = Math.round((periodEnd - periodStart) / (1000*60*60*24)) + 1;
         const periodWeeks = periodDays / 7;
 
-        // Build per-person stats
+        // Build stats for everyone (or just current user)
         const statsMap = {};
-
-        // Init all people (or just the current user)
         peopleHierarchy.forEach(group => {
             group.members.forEach(name => {
                 if (!canSeeAll && name !== req.user.jmeno) return;
                 statsMap[name] = {
-                    name,
-                    group: group.label,
-                    groupColor: group.color,
+                    name, group: group.label, groupColor: group.color,
                     personColor: personColors[name] || '#666',
                     targetWeekly: group.target,
                     targetPeriod: Math.round(group.target * periodWeeks * 10) / 10,
-                    totalHours: 0,
-                    ripCount: 0,
-                    vacationCount: 0,
-                    morningCount: 0,
-                    afternoonCount: 0,
-                    nightCount: 0,
+                    totalHours: 0, ripCount: 0, vacationCount: 0,
+                    morningCount: 0, afternoonCount: 0, nightCount: 0,
                     totalShifts: 0
                 };
             });
         });
 
-        // Aggregate shifts in period
         allShifts.forEach(s => {
             const d = new Date(s.Date);
             if (d < periodStart || d > periodEnd) return;
             const stats = statsMap[s.Name];
             if (!stats) return;
-
             const cls = classifyShift(s);
             if (cls.isRIP) { stats.ripCount++; stats.totalShifts++; return; }
             if (cls.isVacation) { stats.vacationCount++; stats.totalShifts++; return; }
-
             stats.totalHours += calculateDuration(s.Start, s.End);
             stats.totalShifts++;
             if (cls.shiftType === 'morning') stats.morningCount++;
@@ -1440,242 +1426,485 @@ app.get('/stats', async (req, res) => {
             else if (cls.shiftType === 'night') stats.nightCount++;
         });
 
-        // Convert to sorted array
         const statsArr = Object.values(statsMap);
-        statsArr.sort((a,b) => b.totalHours - a.totalHours);
 
-        // Summary totals
-        const sumHours = Math.round(statsArr.reduce((a,b) => a + b.totalHours, 0) * 10) / 10;
-        const sumRIP = statsArr.reduce((a,b) => a + b.ripCount, 0);
-        const sumMorning = statsArr.reduce((a,b) => a + b.morningCount, 0);
-        const sumAfternoon = statsArr.reduce((a,b) => a + b.afternoonCount, 0);
-        const sumNight = statsArr.reduce((a,b) => a + b.nightCount, 0);
-        const maxHours = statsArr.length > 0 ? Math.max(...statsArr.map(s => s.totalHours)) : 1;
-
-        // Group people for table sections
-        const groupOrder = peopleHierarchy.map(g => g.label);
-
-        // Build table rows HTML
-        let tableRowsHTML = '';
-        let currentGroup = '';
-        const sortedByGroup = [...statsArr].sort((a,b) => {
-            const ai = groupOrder.indexOf(a.group);
-            const bi = groupOrder.indexOf(b.group);
-            if (ai !== bi) return ai - bi;
-            return b.totalHours - a.totalHours;
-        });
-
-        sortedByGroup.forEach(s => {
-            if (s.group !== currentGroup) {
-                currentGroup = s.group;
-                tableRowsHTML += '<tr class="group-header" data-group="' + currentGroup.replace(/"/g,'&quot;') + '" style="cursor:pointer;" onclick="toggleGroup(this)"><td colspan="10" style="padding:10px 14px;font-weight:700;font-family:Oswald;font-size:0.85rem;color:' + s.groupColor + ';letter-spacing:1px;border-bottom:1px solid #1e2030;background:#0a0b10;">' + currentGroup.toUpperCase() + ' <span style="font-size:0.7rem;color:#3a4050;margin-left:6px;">&#9660;</span></td></tr>';
+        // ========== SIDEBAR HTML ==========
+        const periodQs = 'period=' + period + (req.query.date ? '&date=' + req.query.date : '') + (period === 'custom' && req.query.from ? '&from=' + req.query.from + '&to=' + req.query.to : '');
+        let sidebarHTML = '';
+        if (canSeeAll) {
+            sidebarHTML += '<a href="/stats?' + periodQs + '" class="nav-item ' + (!selectedPerson ? 'active' : '') + '"><span class="nav-ico">&#128202;</span><span>TEAM OVERVIEW</span></a>';
+            peopleHierarchy.forEach(group => {
+                const gid = group.label.replace(/[^a-z0-9]/gi, '');
+                const memberCount = group.members.length;
+                sidebarHTML += '<div class="nav-group">';
+                sidebarHTML += '<div class="nav-group-header" onclick="toggleNavGroup(\'' + gid + '\')"><span class="ng-dot" style="background:' + group.color + '"></span><span class="ng-label">' + group.label + '</span><span class="ng-count">' + memberCount + '</span><span class="ng-arrow" id="arr_' + gid + '">&#9660;</span></div>';
+                sidebarHTML += '<div class="nav-group-items" id="grp_' + gid + '">';
+                const members = [...group.members].sort();
+                members.forEach(name => {
+                    const st = statsMap[name];
+                    const hrs = st ? st.totalHours.toFixed(1) : '0';
+                    const active = selectedPerson === name ? 'active' : '';
+                    const color = personColors[name] || '#666';
+                    const initial = name.charAt(0).toUpperCase();
+                    sidebarHTML += '<a href="/stats?person=' + encodeURIComponent(name) + '&' + periodQs + '" class="person-item ' + active + '"><span class="pi-avatar" style="background:' + color + '">' + initial + '</span><span class="pi-name">' + name + '</span><span class="pi-hrs">' + hrs + 'h</span></a>';
+                });
+                sidebarHTML += '</div></div>';
+            });
+        } else {
+            const me = statsMap[req.user.jmeno];
+            if (me) {
+                sidebarHTML += '<div style="padding:16px;color:#4a5060;font-size:0.75rem;text-align:center;letter-spacing:1.5px;font-family:Oswald;">YOUR STATS</div>';
+                sidebarHTML += '<a href="/stats?' + periodQs + '" class="person-item active"><span class="pi-avatar" style="background:' + me.personColor + '">' + me.name.charAt(0).toUpperCase() + '</span><span class="pi-name">' + me.name + '</span><span class="pi-hrs">' + me.totalHours.toFixed(1) + 'h</span></a>';
             }
-            const pct = s.targetPeriod > 0 ? Math.round((s.totalHours / s.targetPeriod) * 100) : (s.totalHours > 0 ? 999 : 0);
-            const barW = s.targetPeriod > 0 ? Math.min(100, pct) : (s.totalHours > 0 ? 100 : 0);
-            const barColor = pct >= 100 ? '#4caf50' : pct >= 80 ? '#fbc02d' : '#f44336';
-            tableRowsHTML += '<tr class="stat-row" data-group="' + currentGroup.replace(/"/g,'&quot;') + '" data-hours="' + s.totalHours.toFixed(1) + '" data-name="' + s.name + '">';
-            tableRowsHTML += '<td style="padding:8px 12px;font-weight:600;color:#c8d0e0;font-size:0.82rem;white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + s.personColor + ';margin-right:8px;"></span>' + s.name + '</td>';
-            tableRowsHTML += '<td class="col-group" style="padding:8px 10px;color:' + s.groupColor + ';font-size:0.72rem;font-weight:600;">' + s.group.replace('Traders - ','').replace('Head of Trading - eSims','HoT') + '</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:right;font-weight:700;color:#e0e6f0;font-size:0.82rem;">' + s.totalHours.toFixed(1) + 'h</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:right;color:#4a5060;font-size:0.78rem;">' + s.targetPeriod.toFixed(0) + 'h</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;min-width:100px;"><div style="background:#1a1c28;border-radius:4px;height:16px;overflow:hidden;position:relative;"><div style="width:' + barW + '%;height:100%;background:' + barColor + ';border-radius:4px;transition:width 0.5s;"></div><span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:0.6rem;font-weight:700;color:#c8d0e0;">' + pct + '%</span></div></td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#ef5350;font-weight:600;font-size:0.8rem;">' + (s.ripCount || '–') + '</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#ffa726;font-weight:600;font-size:0.8rem;">' + (s.morningCount || '–') + '</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#42a5f5;font-weight:600;font-size:0.8rem;">' + (s.afternoonCount || '–') + '</td>';
-            tableRowsHTML += '<td style="padding:8px 10px;text-align:center;color:#7c4dff;font-weight:600;font-size:0.8rem;">' + (s.nightCount || '–') + '</td>';
-            tableRowsHTML += '<td class="col-total" style="padding:8px 10px;text-align:center;color:#4a5060;font-size:0.78rem;">' + s.totalShifts + '</td>';
-            tableRowsHTML += '</tr>';
-        });
+        }
 
-        // Build bar chart HTML
-        let barChartHTML = '';
-        statsArr.slice(0, 30).forEach(s => {
-            const barPct = maxHours > 0 ? Math.round((s.totalHours / maxHours) * 100) : 0;
-            barChartHTML += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">';
-            barChartHTML += '<div style="width:90px;text-align:right;font-size:0.72rem;color:#8892a4;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + s.name + '</div>';
-            barChartHTML += '<div style="flex:1;background:#1a1c28;border-radius:4px;height:20px;overflow:hidden;"><div style="width:' + barPct + '%;height:100%;background:linear-gradient(90deg,' + s.personColor + ',' + s.personColor + '88);border-radius:4px;transition:width 0.5s;"></div></div>';
-            barChartHTML += '<div style="width:45px;font-size:0.72rem;color:#c8d0e0;font-weight:700;">' + s.totalHours.toFixed(1) + 'h</div>';
-            barChartHTML += '</div>';
-        });
+        // ========== MAIN CONTENT ==========
+        let mainHTML = '';
+        if (selectedPerson && statsMap[selectedPerson]) {
+            // === PERSON DETAIL VIEW ===
+            const p = statsMap[selectedPerson];
+            const pct = p.targetPeriod > 0 ? Math.round((p.totalHours / p.targetPeriod) * 100) : 0;
+            const progressColor = pct >= 100 ? '#4caf50' : pct >= 80 ? '#fbc02d' : '#f44336';
+
+            // Per-day hours for line chart
+            const dailyHours = {};
+            for (let d = new Date(periodStart); d <= periodEnd; d.setDate(d.getDate() + 1)) {
+                dailyHours[toISOLocal(d)] = 0;
+            }
+            const personShiftsList = [];
+            allShifts.forEach(s => {
+                if (s.Name !== selectedPerson) return;
+                const d = new Date(s.Date);
+                if (d < periodStart || d > periodEnd) return;
+                personShiftsList.push(s);
+                if (s.Product === 'RIP' || s.Product === 'Vacation') return;
+                const key = s.Date;
+                if (dailyHours[key] !== undefined) dailyHours[key] += calculateDuration(s.Start, s.End);
+            });
+
+            // Build SVG line chart
+            const daysArr = Object.keys(dailyHours).sort();
+            const maxDayH = Math.max(8, ...Object.values(dailyHours));
+            const chartW = 800, chartH = 220, padL = 40, padR = 20, padT = 20, padB = 40;
+            const plotW = chartW - padL - padR;
+            const plotH = chartH - padT - padB;
+            let linePts = '';
+            let areaPts = 'M ' + padL + ',' + (padT + plotH);
+            daysArr.forEach((day, i) => {
+                const x = padL + (i / Math.max(1, daysArr.length - 1)) * plotW;
+                const y = padT + plotH - (dailyHours[day] / maxDayH) * plotH;
+                linePts += (i === 0 ? 'M ' : ' L ') + x.toFixed(1) + ',' + y.toFixed(1);
+                areaPts += ' L ' + x.toFixed(1) + ',' + y.toFixed(1);
+            });
+            areaPts += ' L ' + (padL + plotW) + ',' + (padT + plotH) + ' Z';
+
+            // Y-axis grid lines
+            let gridHTML = '';
+            for (let i = 0; i <= 4; i++) {
+                const y = padT + (i / 4) * plotH;
+                const val = Math.round(maxDayH * (1 - i / 4));
+                gridHTML += '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="#1e2030" stroke-dasharray="2,4"/>';
+                gridHTML += '<text x="' + (padL - 8) + '" y="' + (y + 4) + '" text-anchor="end" fill="#3a4050" font-size="10" font-family="Montserrat">' + val + 'h</text>';
+            }
+
+            // X-axis labels (sample every ~N days)
+            let xLabelsHTML = '';
+            const step = Math.max(1, Math.floor(daysArr.length / 7));
+            daysArr.forEach((day, i) => {
+                if (i % step !== 0 && i !== daysArr.length - 1) return;
+                const x = padL + (i / Math.max(1, daysArr.length - 1)) * plotW;
+                const d = new Date(day + 'T12:00:00');
+                const lbl = d.getDate() + '.' + (d.getMonth() + 1) + '.';
+                xLabelsHTML += '<text x="' + x + '" y="' + (chartH - 12) + '" text-anchor="middle" fill="#5b7fa6" font-size="10" font-family="Montserrat" font-weight="600">' + lbl + '</text>';
+            });
+
+            // Build donut chart (morning/afternoon/night/RIP)
+            const donutR = 70, donutCx = 100, donutCy = 100;
+            const donutTotal = p.morningCount + p.afternoonCount + p.nightCount + p.ripCount;
+            const donutCirc = 2 * Math.PI * donutR;
+            let donutSegments = '';
+            if (donutTotal > 0) {
+                let offset = 0;
+                const segs = [
+                    { val: p.morningCount, color: '#ffa726' },
+                    { val: p.afternoonCount, color: '#42a5f5' },
+                    { val: p.nightCount, color: '#7c4dff' },
+                    { val: p.ripCount, color: '#ef5350' }
+                ];
+                segs.forEach(seg => {
+                    if (seg.val === 0) return;
+                    const segLen = (seg.val / donutTotal) * donutCirc;
+                    donutSegments += '<circle cx="' + donutCx + '" cy="' + donutCy + '" r="' + donutR + '" fill="none" stroke="' + seg.color + '" stroke-width="22" stroke-dasharray="' + segLen + ' ' + donutCirc + '" stroke-dashoffset="' + (-offset) + '" transform="rotate(-90 ' + donutCx + ' ' + donutCy + ')"/>';
+                    offset += segLen;
+                });
+            } else {
+                donutSegments = '<circle cx="' + donutCx + '" cy="' + donutCy + '" r="' + donutR + '" fill="none" stroke="#1a1c28" stroke-width="22"/>';
+            }
+
+            // Recent shifts list (last 10)
+            const recentShifts = personShiftsList.sort((a,b) => b.Date.localeCompare(a.Date)).slice(0, 10);
+            let recentHTML = '';
+            if (recentShifts.length === 0) {
+                recentHTML = '<div style="padding:30px;text-align:center;color:#3a4050;font-size:0.85rem;">No shifts in this period</div>';
+            } else {
+                recentShifts.forEach(s => {
+                    const d = new Date(s.Date + 'T12:00:00');
+                    const day = d.toLocaleDateString('en-GB', { weekday: 'short' });
+                    const date = d.getDate() + '.' + (d.getMonth() + 1) + '.';
+                    const cls = classifyShift(s);
+                    let typeColor = '#555', typeLabel = '';
+                    if (cls.isRIP) { typeColor = '#ef5350'; typeLabel = 'RIP'; }
+                    else if (cls.isVacation) { typeColor = '#9e9e9e'; typeLabel = 'VAC'; }
+                    else if (cls.shiftType === 'morning') { typeColor = '#ffa726'; typeLabel = 'MORNING'; }
+                    else if (cls.shiftType === 'afternoon') { typeColor = '#42a5f5'; typeLabel = 'AFTERNOON'; }
+                    else if (cls.shiftType === 'night') { typeColor = '#7c4dff'; typeLabel = 'NIGHT'; }
+                    else { typeColor = '#555'; typeLabel = 'OTHER'; }
+                    const prod = (s.Product || s.Trading || '').replace(/`/g, "'");
+                    recentHTML += '<div class="shift-item"><div class="shift-date"><div class="sd-day">' + day + '</div><div class="sd-num">' + date + '</div></div><div class="shift-body"><div class="shift-prod">' + prod + '</div><div class="shift-time">' + s.Start + ' &rarr; ' + s.End + '</div></div><div class="shift-type" style="background:' + typeColor + '22;color:' + typeColor + ';border:1px solid ' + typeColor + '44;">' + typeLabel + '</div></div>';
+                });
+            }
+
+            const avgDaily = daysArr.length > 0 ? (p.totalHours / daysArr.length).toFixed(1) : '0';
+
+            mainHTML += '<div class="hero"><div class="hero-avatar" style="background:' + p.personColor + '">' + p.name.charAt(0).toUpperCase() + '</div><div class="hero-info"><div class="hero-eyebrow">' + p.group.toUpperCase() + '</div><div class="hero-name">' + p.name + '</div><div class="hero-meta">' + p.totalShifts + ' shifts &middot; ' + p.totalHours.toFixed(1) + 'h total &middot; ' + avgDaily + 'h/day avg</div></div><div class="hero-progress"><div class="hp-circle" style="background:conic-gradient(' + progressColor + ' ' + (pct * 3.6) + 'deg, #1a1c28 0deg);"><div class="hp-inner"><div class="hp-val">' + pct + '%</div><div class="hp-lbl">OF TARGET</div></div></div></div></div>';
+
+            mainHTML += '<div class="kpi-grid">';
+            mainHTML += '<div class="kpi-card kpi-hours"><div class="kpi-ico">&#9201;</div><div class="kpi-val">' + p.totalHours.toFixed(1) + '<span class="kpi-unit">h</span></div><div class="kpi-lbl">Total Hours</div><div class="kpi-sub">Target ' + p.targetPeriod.toFixed(0) + 'h</div></div>';
+            mainHTML += '<div class="kpi-card kpi-morning"><div class="kpi-ico">&#9728;</div><div class="kpi-val">' + p.morningCount + '</div><div class="kpi-lbl">Morning</div><div class="kpi-sub">07:00 &ndash; 16:00</div></div>';
+            mainHTML += '<div class="kpi-card kpi-afternoon"><div class="kpi-ico">&#127773;</div><div class="kpi-val">' + p.afternoonCount + '</div><div class="kpi-lbl">Afternoon</div><div class="kpi-sub">15:00 &ndash; 00:00</div></div>';
+            mainHTML += '<div class="kpi-card kpi-night"><div class="kpi-ico">&#127769;</div><div class="kpi-val">' + p.nightCount + '</div><div class="kpi-lbl">Night</div><div class="kpi-sub">23:00 &ndash; 08:00</div></div>';
+            mainHTML += '<div class="kpi-card kpi-rip"><div class="kpi-ico">&#9888;</div><div class="kpi-val">' + p.ripCount + '</div><div class="kpi-lbl">RIP</div><div class="kpi-sub">' + p.vacationCount + ' vacation</div></div>';
+            mainHTML += '</div>';
+
+            mainHTML += '<div class="two-col">';
+            mainHTML += '<div class="panel panel-wide"><div class="panel-header"><div class="panel-title">HOURS TREND</div><div class="panel-sub">Daily hours across the period</div></div><div class="chart-wrap"><svg viewBox="0 0 ' + chartW + ' ' + chartH + '" style="width:100%;height:auto;"><defs><linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#00d9ff"/><stop offset="100%" stop-color="#a78bfa"/></linearGradient><linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#00d9ff" stop-opacity="0.35"/><stop offset="100%" stop-color="#00d9ff" stop-opacity="0"/></linearGradient></defs>' + gridHTML + '<path d="' + areaPts + '" fill="url(#areaGrad)"/><path d="' + linePts + '" stroke="url(#lineGrad)" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>' + xLabelsHTML + '</svg></div></div>';
+
+            mainHTML += '<div class="panel"><div class="panel-header"><div class="panel-title">SHIFT MIX</div><div class="panel-sub">' + donutTotal + ' shifts total</div></div><div class="donut-wrap"><svg viewBox="0 0 200 200" style="width:180px;height:180px;">' + donutSegments + '<text x="100" y="96" text-anchor="middle" fill="#c8d0e0" font-size="28" font-weight="700" font-family="Oswald">' + donutTotal + '</text><text x="100" y="116" text-anchor="middle" fill="#4a5060" font-size="10" letter-spacing="2" font-family="Oswald">SHIFTS</text></svg><div class="donut-legend"><div class="dl-item"><span class="dl-dot" style="background:#ffa726"></span>Morning<span class="dl-val">' + p.morningCount + '</span></div><div class="dl-item"><span class="dl-dot" style="background:#42a5f5"></span>Afternoon<span class="dl-val">' + p.afternoonCount + '</span></div><div class="dl-item"><span class="dl-dot" style="background:#7c4dff"></span>Night<span class="dl-val">' + p.nightCount + '</span></div><div class="dl-item"><span class="dl-dot" style="background:#ef5350"></span>RIP<span class="dl-val">' + p.ripCount + '</span></div></div></div></div>';
+            mainHTML += '</div>';
+
+            mainHTML += '<div class="panel"><div class="panel-header"><div class="panel-title">RECENT SHIFTS</div><div class="panel-sub">Last ' + recentShifts.length + ' shifts in this period</div></div><div class="shifts-list">' + recentHTML + '</div></div>';
+
+        } else {
+            // === TEAM OVERVIEW ===
+            const sumHours = Math.round(statsArr.reduce((a,b) => a + b.totalHours, 0) * 10) / 10;
+            const sumRIP = statsArr.reduce((a,b) => a + b.ripCount, 0);
+            const sumMorning = statsArr.reduce((a,b) => a + b.morningCount, 0);
+            const sumAfternoon = statsArr.reduce((a,b) => a + b.afternoonCount, 0);
+            const sumNight = statsArr.reduce((a,b) => a + b.nightCount, 0);
+            const activePeople = statsArr.filter(s => s.totalShifts > 0).length;
+            const maxH = Math.max(1, ...statsArr.map(s => s.totalHours));
+
+            mainHTML += '<div class="hero"><div class="hero-avatar" style="background:linear-gradient(135deg,#00d9ff,#a78bfa)">&#128202;</div><div class="hero-info"><div class="hero-eyebrow">STATISTICS OVERVIEW</div><div class="hero-name">Team Overview</div><div class="hero-meta">' + activePeople + ' active people &middot; ' + sumHours + 'h total &middot; ' + periodLabel + '</div></div></div>';
+
+            mainHTML += '<div class="kpi-grid">';
+            mainHTML += '<div class="kpi-card kpi-hours"><div class="kpi-ico">&#9201;</div><div class="kpi-val">' + sumHours + '<span class="kpi-unit">h</span></div><div class="kpi-lbl">Total Hours</div><div class="kpi-sub">' + activePeople + ' people</div></div>';
+            mainHTML += '<div class="kpi-card kpi-morning"><div class="kpi-ico">&#9728;</div><div class="kpi-val">' + sumMorning + '</div><div class="kpi-lbl">Morning</div><div class="kpi-sub">Shifts</div></div>';
+            mainHTML += '<div class="kpi-card kpi-afternoon"><div class="kpi-ico">&#127773;</div><div class="kpi-val">' + sumAfternoon + '</div><div class="kpi-lbl">Afternoon</div><div class="kpi-sub">Shifts</div></div>';
+            mainHTML += '<div class="kpi-card kpi-night"><div class="kpi-ico">&#127769;</div><div class="kpi-val">' + sumNight + '</div><div class="kpi-lbl">Night</div><div class="kpi-sub">Shifts</div></div>';
+            mainHTML += '<div class="kpi-card kpi-rip"><div class="kpi-ico">&#9888;</div><div class="kpi-val">' + sumRIP + '</div><div class="kpi-lbl">RIP</div><div class="kpi-sub">Shifts</div></div>';
+            mainHTML += '</div>';
+
+            // Per-group breakdown panels
+            peopleHierarchy.forEach(group => {
+                const gMembers = statsArr.filter(s => s.group === group.label);
+                if (gMembers.length === 0) return;
+                gMembers.sort((a,b) => b.totalHours - a.totalHours);
+                const gTotal = gMembers.reduce((a,b) => a + b.totalHours, 0);
+
+                let rowsHTML = '';
+                gMembers.forEach(s => {
+                    const barPct = maxH > 0 ? (s.totalHours / maxH) * 100 : 0;
+                    const targetPct = s.targetPeriod > 0 ? Math.round((s.totalHours / s.targetPeriod) * 100) : 0;
+                    rowsHTML += '<a href="/stats?person=' + encodeURIComponent(s.name) + '&' + periodQs + '" class="team-row"><span class="tr-avatar" style="background:' + s.personColor + '">' + s.name.charAt(0).toUpperCase() + '</span><span class="tr-name">' + s.name + '</span><div class="tr-bar-wrap"><div class="tr-bar" style="width:' + barPct.toFixed(1) + '%;background:linear-gradient(90deg,' + s.personColor + ',' + s.personColor + '99);"></div></div><span class="tr-hours">' + s.totalHours.toFixed(1) + 'h</span><span class="tr-target">' + (s.targetPeriod > 0 ? targetPct + '%' : '-') + '</span><span class="tr-counts"><span style="color:#ef5350">' + (s.ripCount||0) + '</span>&middot;<span style="color:#ffa726">' + (s.morningCount||0) + '</span>&middot;<span style="color:#42a5f5">' + (s.afternoonCount||0) + '</span>&middot;<span style="color:#7c4dff">' + (s.nightCount||0) + '</span></span></a>';
+                });
+
+                mainHTML += '<div class="panel"><div class="panel-header"><div class="panel-title" style="color:' + group.color + '">' + group.label.toUpperCase() + '</div><div class="panel-sub">' + gMembers.length + ' people &middot; ' + gTotal.toFixed(1) + 'h total</div></div><div class="team-list">' + rowsHTML + '</div></div>';
+            });
+        }
 
         res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Statistics – Drachir.gg</title>
+<title>Statistics &ndash; Drachir.gg</title>
 <link rel="icon" type="image/png" sizes="192x192" href="/images/icon-192.png">
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
-body{background:#0d0e14;color:#c8d0e0;font-family:'Montserrat',sans-serif;min-height:100vh;}
-.stats-topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:#0e1118;border-bottom:1px solid #1e2030;flex-wrap:wrap;gap:10px;}
-.stats-topbar-left{display:flex;align-items:center;gap:14px;}
-.stats-topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.btn-back{padding:7px 16px;background:#13151e;border:1px solid #1e2030;border-radius:8px;color:#5b7fa6;text-decoration:none;font-size:0.78rem;font-weight:700;font-family:'Oswald';letter-spacing:1px;transition:0.15s;}
-.btn-back:hover{border-color:rgba(91,127,166,0.5);color:#7ba3cc;}
-.stats-title{font-family:'Oswald';font-weight:700;font-size:1.4rem;color:#fbc02d;letter-spacing:2px;}
-.period-btn{padding:6px 14px;border:1px solid #1e2d3d;border-radius:6px;background:#0e1621;color:#5b7fa6;cursor:pointer;font-weight:700;font-size:0.72rem;letter-spacing:0.5px;transition:0.15s;font-family:'Oswald';}
-.period-btn:hover{border-color:rgba(91,127,166,0.5);color:#7ba3cc;}
-.period-btn.active{background:#1e2030;color:#fbc02d;border-color:rgba(251,192,45,0.3);}
-.nav-row{display:flex;align-items:center;gap:8px;margin-top:4px;}
-.nav-arrow{padding:5px 12px;background:#13151e;border:1px solid #1e2030;border-radius:6px;color:#5b7fa6;text-decoration:none;font-size:0.9rem;font-weight:700;transition:0.15s;}
-.nav-arrow:hover{border-color:rgba(91,127,166,0.5);color:#7ba3cc;}
-.period-label{font-size:0.82rem;color:#8892a4;font-weight:600;min-width:160px;text-align:center;}
-.stats-container{max-width:1200px;margin:0 auto;padding:20px;}
-.summary-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:24px;}
-.summary-card{background:#13151e;border:1px solid #1e2030;border-radius:12px;padding:20px;text-align:center;}
-.summary-card .val{font-family:'Oswald';font-size:2rem;font-weight:700;margin-bottom:4px;}
-.summary-card .lbl{font-size:0.7rem;color:#4a5060;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;}
-.stats-section{background:#13151e;border:1px solid #1e2030;border-radius:12px;margin-bottom:20px;overflow:hidden;}
-.stats-section-title{padding:16px 20px;font-family:'Oswald';font-weight:700;font-size:0.95rem;color:#fbc02d;letter-spacing:1.5px;border-bottom:1px solid #1e2030;}
-table{width:100%;border-collapse:collapse;}
-th{padding:10px 12px;text-align:left;font-size:0.68rem;color:#3a4050;font-weight:700;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #1e2030;cursor:pointer;user-select:none;white-space:nowrap;}
-th:hover{color:#5b7fa6;}
-td{border-bottom:1px solid #0d0e14;}
-.stat-row:hover{background:rgba(251,192,45,0.03);}
-.bar-chart-wrap{padding:20px;}
-.custom-range{display:none;align-items:center;gap:8px;margin-top:6px;}
-.custom-range input[type=date]{padding:5px 10px;background:#0e1621;border:1px solid #1e2d3d;border-radius:6px;color:#c8d0e0;font-size:0.78rem;font-family:'Montserrat';}
-.custom-range button{padding:5px 14px;background:rgba(251,192,45,0.1);border:1px solid rgba(251,192,45,0.3);border-radius:6px;color:#fbc02d;font-weight:700;font-size:0.72rem;cursor:pointer;font-family:'Oswald';letter-spacing:0.5px;}
-.period-tabs{display:flex;gap:4px;}
-.month-select{padding:5px 10px;background:#0e1621;border:1px solid #1e2d3d;border-radius:6px;color:#fbc02d;font-size:0.82rem;font-weight:600;font-family:'Oswald';letter-spacing:0.5px;cursor:pointer;min-width:150px;text-align:center;}
-.month-select option{background:#0e1621;color:#c8d0e0;}
+body{background:#0a0b10;color:#c8d0e0;font-family:'Inter',sans-serif;min-height:100vh;overflow-x:hidden;}
+a{text-decoration:none;color:inherit;}
+
+/* Layout shell */
+.shell{display:flex;min-height:100vh;}
+.sidebar{width:280px;background:#0d0e14;border-right:1px solid #15171f;display:flex;flex-direction:column;position:fixed;left:0;top:0;bottom:0;overflow-y:auto;z-index:10;}
+.main{margin-left:280px;flex:1;min-width:0;background:radial-gradient(ellipse at top left, rgba(0,217,255,0.04) 0%, transparent 50%), radial-gradient(ellipse at top right, rgba(167,139,250,0.04) 0%, transparent 50%), #0a0b10;}
+
+/* Sidebar branding */
+.sb-brand{padding:20px 20px 16px;border-bottom:1px solid #15171f;display:flex;align-items:center;gap:10px;}
+.sb-logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#fbc02d,#f57f17);display:flex;align-items:center;justify-content:center;font-family:'Oswald';font-weight:800;color:#0a0b10;font-size:1.1rem;}
+.sb-title{font-family:'Oswald';font-weight:700;font-size:0.95rem;letter-spacing:2px;color:#fbc02d;}
+.sb-sub{font-size:0.6rem;color:#4a5060;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;}
+
+/* Search */
+.sb-search{padding:14px 16px 10px;}
+.sb-search input{width:100%;padding:9px 12px;background:#15171f;border:1px solid #1e2030;border-radius:8px;color:#c8d0e0;font-size:0.8rem;font-family:'Inter';outline:none;transition:0.15s;}
+.sb-search input:focus{border-color:rgba(0,217,255,0.4);background:#15171f;}
+.sb-search input::placeholder{color:#3a4050;}
+
+/* Nav */
+.sb-nav{padding:6px 10px 20px;flex:1;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#5b7fa6;font-size:0.78rem;font-weight:600;letter-spacing:1px;font-family:'Oswald';transition:0.15s;margin-bottom:4px;}
+.nav-item:hover{background:#15171f;color:#c8d0e0;}
+.nav-item.active{background:linear-gradient(90deg,rgba(0,217,255,0.15),rgba(167,139,250,0.1));color:#00d9ff;box-shadow:inset 2px 0 0 #00d9ff;}
+.nav-ico{font-size:1rem;}
+
+.nav-group{margin-top:8px;}
+.nav-group-header{display:flex;align-items:center;gap:8px;padding:8px 12px;color:#4a5060;font-size:0.65rem;font-weight:700;letter-spacing:1.5px;font-family:'Oswald';cursor:pointer;user-select:none;}
+.nav-group-header:hover{color:#7ba3cc;}
+.ng-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+.ng-label{flex:1;text-transform:uppercase;}
+.ng-count{background:#15171f;color:#5b7fa6;padding:1px 6px;border-radius:10px;font-size:0.6rem;}
+.ng-arrow{font-size:0.6rem;transition:transform 0.2s;}
+.nav-group-items{display:flex;flex-direction:column;gap:2px;}
+
+.person-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:0.78rem;color:#8892a4;transition:0.15s;}
+.person-item:hover{background:#15171f;color:#c8d0e0;}
+.person-item.active{background:linear-gradient(90deg,rgba(0,217,255,0.12),rgba(167,139,250,0.08));color:#fff;box-shadow:inset 2px 0 0 #00d9ff;}
+.pi-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald';font-weight:700;color:#0a0b10;font-size:0.78rem;flex-shrink:0;}
+.pi-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}
+.pi-hrs{font-size:0.65rem;color:#4a5060;font-weight:600;font-family:'Oswald';letter-spacing:0.5px;}
+.person-item.active .pi-hrs{color:#00d9ff;}
+
+/* Main topbar */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 32px;border-bottom:1px solid #15171f;background:rgba(13,14,20,0.5);backdrop-filter:blur(10px);position:sticky;top:0;z-index:5;gap:14px;flex-wrap:wrap;}
+.topbar-left{display:flex;align-items:center;gap:14px;min-width:0;flex:1;}
+.tb-back{padding:7px 12px;background:#13151e;border:1px solid #1e2030;border-radius:8px;color:#5b7fa6;font-size:0.72rem;font-weight:700;font-family:'Oswald';letter-spacing:1px;transition:0.15s;}
+.tb-back:hover{border-color:rgba(0,217,255,0.4);color:#00d9ff;}
+.tb-crumbs{display:flex;align-items:center;gap:8px;font-size:0.72rem;color:#3a4050;font-family:'Oswald';letter-spacing:1.5px;}
+.tb-crumbs .sep{color:#2a2d3a;}
+.tb-crumbs .current{color:#c8d0e0;}
+.topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.tb-btn{padding:6px 12px;background:#13151e;border:1px solid #1e2030;border-radius:6px;color:#5b7fa6;cursor:pointer;font-size:0.7rem;font-weight:700;font-family:'Oswald';letter-spacing:1px;transition:0.15s;}
+.tb-btn:hover{border-color:rgba(0,217,255,0.4);color:#00d9ff;}
+.tb-btn.active{background:linear-gradient(135deg,rgba(0,217,255,0.15),rgba(167,139,250,0.15));color:#00d9ff;border-color:rgba(0,217,255,0.4);}
+.tb-nav-arrow{width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:#13151e;border:1px solid #1e2030;border-radius:6px;color:#5b7fa6;font-size:0.85rem;font-weight:700;transition:0.15s;}
+.tb-nav-arrow:hover{border-color:rgba(0,217,255,0.4);color:#00d9ff;}
+.tb-month{padding:6px 12px;background:#13151e;border:1px solid #1e2030;border-radius:6px;color:#fbc02d;font-size:0.78rem;font-weight:700;font-family:'Oswald';letter-spacing:1px;cursor:pointer;min-width:150px;text-align:center;outline:none;}
+.tb-month option{background:#13151e;color:#c8d0e0;}
+.tb-period-lbl{padding:6px 12px;background:#13151e;border:1px solid #1e2030;border-radius:6px;color:#8892a4;font-size:0.78rem;font-weight:600;min-width:150px;text-align:center;}
+
+/* Content area */
+.content{padding:24px 32px;max-width:1400px;}
+
+/* Hero block */
+.hero{display:flex;align-items:center;gap:20px;padding:24px 28px;background:linear-gradient(135deg,rgba(13,14,20,0.8),rgba(19,21,30,0.8));border:1px solid #1e2030;border-radius:16px;margin-bottom:22px;position:relative;overflow:hidden;}
+.hero::before{content:'';position:absolute;top:-50%;right:-10%;width:400px;height:400px;background:radial-gradient(circle,rgba(0,217,255,0.08) 0%,transparent 70%);pointer-events:none;}
+.hero-avatar{width:60px;height:60px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-family:'Oswald';font-weight:800;font-size:1.7rem;color:#0a0b10;flex-shrink:0;position:relative;z-index:1;}
+.hero-info{flex:1;min-width:0;position:relative;z-index:1;}
+.hero-eyebrow{font-size:0.65rem;color:#5b7fa6;font-weight:700;letter-spacing:2px;font-family:'Oswald';margin-bottom:4px;}
+.hero-name{font-family:'Oswald';font-size:1.9rem;font-weight:700;color:#fff;letter-spacing:0.5px;line-height:1.1;}
+.hero-meta{font-size:0.82rem;color:#8892a4;margin-top:6px;font-weight:500;}
+.hero-progress{position:relative;z-index:1;}
+.hp-circle{width:90px;height:90px;border-radius:50%;display:flex;align-items:center;justify-content:center;padding:6px;}
+.hp-inner{width:100%;height:100%;background:#0d0e14;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.hp-val{font-family:'Oswald';font-size:1.3rem;font-weight:700;color:#fff;}
+.hp-lbl{font-size:0.55rem;color:#4a5060;letter-spacing:1.5px;font-weight:700;font-family:'Oswald';margin-top:2px;}
+
+/* KPI grid */
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:22px;}
+.kpi-card{background:#13151e;border:1px solid #1e2030;border-radius:14px;padding:20px;position:relative;overflow:hidden;transition:0.2s;}
+.kpi-card:hover{transform:translateY(-2px);border-color:rgba(0,217,255,0.25);}
+.kpi-card::before{content:'';position:absolute;top:-30%;right:-20%;width:140px;height:140px;border-radius:50%;opacity:0.12;pointer-events:none;}
+.kpi-hours::before{background:#4caf50;}
+.kpi-morning::before{background:#ffa726;}
+.kpi-afternoon::before{background:#42a5f5;}
+.kpi-night::before{background:#7c4dff;}
+.kpi-rip::before{background:#ef5350;}
+.kpi-ico{font-size:1.2rem;margin-bottom:10px;opacity:0.8;}
+.kpi-val{font-family:'Oswald';font-size:2.1rem;font-weight:700;color:#fff;line-height:1;letter-spacing:0.5px;}
+.kpi-unit{font-size:1rem;color:#5b7fa6;margin-left:2px;}
+.kpi-lbl{font-size:0.72rem;font-weight:700;color:#8892a4;letter-spacing:1.5px;text-transform:uppercase;margin-top:8px;}
+.kpi-sub{font-size:0.65rem;color:#4a5060;margin-top:4px;font-weight:500;}
+.kpi-hours .kpi-val{color:#4caf50;}
+.kpi-morning .kpi-val{color:#ffa726;}
+.kpi-afternoon .kpi-val{color:#42a5f5;}
+.kpi-night .kpi-val{color:#7c4dff;}
+.kpi-rip .kpi-val{color:#ef5350;}
+
+/* Panel */
+.panel{background:#13151e;border:1px solid #1e2030;border-radius:14px;margin-bottom:18px;overflow:hidden;}
+.panel-header{padding:18px 22px;border-bottom:1px solid #1e2030;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;}
+.panel-title{font-family:'Oswald';font-weight:700;font-size:0.85rem;color:#fff;letter-spacing:2px;}
+.panel-sub{font-size:0.72rem;color:#4a5060;font-weight:500;}
+
+.two-col{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-bottom:18px;}
+.two-col .panel{margin-bottom:0;}
+
+.chart-wrap{padding:16px 20px 10px;}
+
+/* Donut */
+.donut-wrap{padding:20px;display:flex;align-items:center;gap:20px;}
+.donut-legend{flex:1;display:flex;flex-direction:column;gap:8px;}
+.dl-item{display:flex;align-items:center;gap:10px;font-size:0.78rem;color:#8892a4;font-weight:500;}
+.dl-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.dl-val{margin-left:auto;font-family:'Oswald';color:#c8d0e0;font-weight:700;font-size:0.85rem;}
+
+/* Team list (overview) */
+.team-list{padding:8px 14px;}
+.team-row{display:grid;grid-template-columns:32px 1fr 2fr auto auto auto;align-items:center;gap:12px;padding:10px 8px;border-radius:8px;transition:0.15s;color:#c8d0e0;}
+.team-row:hover{background:rgba(0,217,255,0.05);}
+.tr-avatar{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Oswald';font-weight:700;color:#0a0b10;font-size:0.85rem;}
+.tr-name{font-weight:600;font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.tr-bar-wrap{height:8px;background:#1a1c28;border-radius:4px;overflow:hidden;min-width:80px;}
+.tr-bar{height:100%;border-radius:4px;transition:width 0.5s;}
+.tr-hours{font-family:'Oswald';font-weight:700;font-size:0.85rem;color:#fff;min-width:55px;text-align:right;}
+.tr-target{font-size:0.7rem;color:#4a5060;font-weight:600;min-width:40px;text-align:right;}
+.tr-counts{font-size:0.72rem;color:#5b7fa6;font-weight:600;letter-spacing:0.5px;min-width:90px;text-align:right;}
+
+/* Shifts list */
+.shifts-list{padding:8px 20px 16px;}
+.shift-item{display:grid;grid-template-columns:60px 1fr auto;align-items:center;gap:14px;padding:12px 10px;border-bottom:1px solid #15171f;}
+.shift-item:last-child{border-bottom:none;}
+.shift-date{text-align:center;}
+.sd-day{font-size:0.62rem;color:#4a5060;letter-spacing:1.2px;font-weight:700;font-family:'Oswald';text-transform:uppercase;}
+.sd-num{font-family:'Oswald';font-size:1rem;font-weight:700;color:#c8d0e0;margin-top:2px;}
+.shift-body{min-width:0;}
+.shift-prod{font-weight:600;font-size:0.85rem;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.shift-time{font-size:0.72rem;color:#5b7fa6;margin-top:3px;font-family:'Oswald';letter-spacing:0.5px;font-weight:600;}
+.shift-type{font-size:0.6rem;font-weight:700;letter-spacing:1px;padding:4px 10px;border-radius:6px;font-family:'Oswald';}
+
+/* Mobile */
+.mobile-burger{display:none;width:40px;height:40px;align-items:center;justify-content:center;background:#13151e;border:1px solid #1e2030;border-radius:8px;color:#8892a4;cursor:pointer;}
+@media(max-width:1024px){
+    .kpi-grid{grid-template-columns:repeat(3,1fr);}
+    .kpi-card:nth-child(n+4){grid-column:span 1;}
+    .two-col{grid-template-columns:1fr;}
+    .team-row{grid-template-columns:28px 1fr auto auto;gap:8px;}
+    .tr-bar-wrap{display:none;}
+    .tr-target,.tr-counts{font-size:0.68rem;}
+}
 @media(max-width:768px){
-    .stats-topbar{padding:10px 14px;}
-    .stats-title{font-size:1.1rem;}
-    .summary-cards{grid-template-columns:repeat(2,1fr);gap:10px;}
-    .stats-container{padding:14px;}
-    .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
-    .col-group,.col-total{display:none;}
-    .bar-chart-wrap{padding:14px;}
+    .sidebar{transform:translateX(-100%);transition:transform 0.25s;width:260px;}
+    .sidebar.open{transform:translateX(0);box-shadow:0 0 40px rgba(0,0,0,0.6);}
+    .main{margin-left:0;}
+    .mobile-burger{display:flex;}
+    .topbar{padding:12px 14px;}
+    .content{padding:16px;}
+    .hero{padding:18px;gap:14px;}
+    .hero-avatar{width:48px;height:48px;font-size:1.4rem;border-radius:12px;}
+    .hero-name{font-size:1.3rem;}
+    .hero-progress{display:none;}
+    .kpi-grid{grid-template-columns:repeat(2,1fr);gap:10px;}
+    .kpi-card{padding:14px;}
+    .kpi-val{font-size:1.6rem;}
+    .team-row{grid-template-columns:28px 1fr auto;}
+    .tr-target,.tr-counts{display:none;}
+    .shift-item{grid-template-columns:50px 1fr auto;gap:10px;padding:10px 6px;}
+    .sd-num{font-size:0.85rem;}
+    .shift-type{font-size:0.55rem;padding:3px 7px;}
 }
 @media(max-width:480px){
-    .summary-cards{grid-template-columns:1fr 1fr;}
-    .summary-card .val{font-size:1.5rem;}
-    .summary-card{padding:14px;}
+    .kpi-grid{grid-template-columns:1fr 1fr;}
+    .topbar-left .tb-crumbs{display:none;}
 }
+
+/* Sidebar backdrop on mobile */
+.sb-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9;}
+.sb-backdrop.show{display:block;}
 </style>
 </head>
 <body>
-<div class="stats-topbar">
-    <div class="stats-topbar-left">
-        <a href="/dashboard" class="btn-back">&larr; DASHBOARD</a>
-        <span class="stats-title">STATISTICS</span>
-    </div>
-    <div class="stats-topbar-right">
-        <div class="period-tabs">
-            <button class="period-btn ${period==='month'?'active':''}" onclick="switchPeriod('month')">MONTH</button>
-            <button class="period-btn ${period==='week'?'active':''}" onclick="switchPeriod('week')">WEEK</button>
-            <button class="period-btn ${period==='custom'?'active':''}" onclick="showCustomRange()">CUSTOM</button>
+<div class="shell">
+    <aside class="sidebar" id="sidebar">
+        <div class="sb-brand">
+            <div class="sb-logo">D</div>
+            <div>
+                <div class="sb-title">DRACHIR</div>
+                <div class="sb-sub">Statistics</div>
+            </div>
         </div>
-        <div class="nav-row">
-            <a href="/stats?period=${period}&date=${prevDate}" class="nav-arrow">&larr;</a>
-            ${period === 'month' ? '<select class="month-select" onchange="jumpToMonth(this.value)">' + monthOptionsHTML + '</select>' : '<span class="period-label">' + periodLabel + '</span>'}
-            <a href="/stats?period=${period}&date=${nextDate}" class="nav-arrow">&rarr;</a>
+        <div class="sb-search">
+            <input type="text" id="personSearch" placeholder="Search person..." oninput="filterPeople(this.value)">
         </div>
-        <div class="custom-range" id="customRange">
-            <input type="date" id="cfrom" value="${req.query.from || toISOLocal(periodStart)}">
-            <span style="color:#4a5060;">–</span>
-            <input type="date" id="cto" value="${req.query.to || toISOLocal(periodEnd)}">
-            <button onclick="applyCustom()">GO</button>
+        <nav class="sb-nav" id="sbNav">
+            ${sidebarHTML}
+        </nav>
+    </aside>
+    <div class="sb-backdrop" id="sbBackdrop" onclick="closeSidebar()"></div>
+    <main class="main">
+        <div class="topbar">
+            <div class="topbar-left">
+                <button class="mobile-burger" onclick="openSidebar()">&#9776;</button>
+                <a href="/dashboard" class="tb-back">&larr; DASHBOARD</a>
+                <div class="tb-crumbs">
+                    <span>STATS</span>
+                    <span class="sep">/</span>
+                    <span class="current">${selectedPerson ? selectedPerson.replace(/"/g, '') : 'OVERVIEW'}</span>
+                </div>
+            </div>
+            <div class="topbar-right">
+                <button class="tb-btn ${period==='month'?'active':''}" onclick="switchPeriod('month')">MONTH</button>
+                <button class="tb-btn ${period==='week'?'active':''}" onclick="switchPeriod('week')">WEEK</button>
+                <button class="tb-btn ${period==='custom'?'active':''}" onclick="switchPeriod('custom')">CUSTOM</button>
+                <a href="/stats?${selectedPerson ? 'person=' + encodeURIComponent(selectedPerson) + '&' : ''}period=${period}&date=${prevDate}" class="tb-nav-arrow">&larr;</a>
+                ${period === 'month' ? '<select class="tb-month" onchange="jumpToMonth(this.value)">' + monthOptionsHTML + '</select>' : '<span class="tb-period-lbl">' + periodLabel + '</span>'}
+                <a href="/stats?${selectedPerson ? 'person=' + encodeURIComponent(selectedPerson) + '&' : ''}period=${period}&date=${nextDate}" class="tb-nav-arrow">&rarr;</a>
+            </div>
         </div>
-    </div>
-</div>
-
-<div class="stats-container">
-    <div class="summary-cards">
-        <div class="summary-card"><div class="val" style="color:#4caf50;">${sumHours}</div><div class="lbl">Total Hours</div></div>
-        <div class="summary-card"><div class="val" style="color:#ef5350;">${sumRIP}</div><div class="lbl">RIP</div></div>
-        <div class="summary-card"><div class="val" style="color:#ffa726;">${sumMorning}</div><div class="lbl">Morning</div></div>
-        <div class="summary-card"><div class="val" style="color:#42a5f5;">${sumAfternoon}</div><div class="lbl">Afternoon</div></div>
-        <div class="summary-card"><div class="val" style="color:#7c4dff;">${sumNight}</div><div class="lbl">Night</div></div>
-    </div>
-
-    <div class="stats-section">
-        <div class="stats-section-title">PEOPLE OVERVIEW</div>
-        <div class="table-wrap">
-        <table>
-            <thead><tr>
-                <th onclick="sortTable(0,'str')">Name</th>
-                <th class="col-group" onclick="sortTable(1,'str')">Group</th>
-                <th onclick="sortTable(2,'num')" style="text-align:right;">Hours</th>
-                <th onclick="sortTable(3,'num')" style="text-align:right;">Target</th>
-                <th>Progress</th>
-                <th onclick="sortTable(5,'num')" style="text-align:center;">RIP</th>
-                <th onclick="sortTable(6,'num')" style="text-align:center;">Morning</th>
-                <th onclick="sortTable(7,'num')" style="text-align:center;">Afternoon</th>
-                <th onclick="sortTable(8,'num')" style="text-align:center;">Night</th>
-                <th class="col-total" onclick="sortTable(9,'num')" style="text-align:center;">Total</th>
-            </tr></thead>
-            <tbody id="statsBody">
-                ${tableRowsHTML}
-            </tbody>
-        </table>
+        <div class="content">
+            ${mainHTML}
         </div>
-    </div>
-
-    <div class="stats-section">
-        <div class="stats-section-title">HOURS CHART</div>
-        <div class="bar-chart-wrap">
-            ${barChartHTML}
-        </div>
-    </div>
+    </main>
 </div>
 
 <script>
-function switchPeriod(p) {
-    var u = new URL(location);
-    u.searchParams.set('period', p);
-    u.searchParams.delete('from');
-    u.searchParams.delete('to');
-    if (p !== 'custom') u.searchParams.delete('date');
-    location.href = u;
+function switchPeriod(p){
+    var u=new URL(location);
+    u.searchParams.set('period',p);
+    u.searchParams.delete('from');u.searchParams.delete('to');
+    if(p!=='custom')u.searchParams.delete('date');
+    if(p==='custom'){
+        var from=prompt('From (YYYY-MM-DD):');
+        if(!from)return;
+        var to=prompt('To (YYYY-MM-DD):');
+        if(!to)return;
+        u.searchParams.set('from',from);
+        u.searchParams.set('to',to);
+    }
+    location.href=u;
 }
-function jumpToMonth(val) {
-    location.href = '/stats?period=month&date=' + val + '-01';
+function jumpToMonth(val){
+    var u=new URL(location);
+    u.searchParams.set('period','month');
+    u.searchParams.set('date',val+'-01');
+    u.searchParams.delete('from');u.searchParams.delete('to');
+    location.href=u;
 }
-function showCustomRange() {
-    var cr = document.getElementById('customRange');
-    cr.style.display = cr.style.display === 'flex' ? 'none' : 'flex';
+function toggleNavGroup(gid){
+    var el=document.getElementById('grp_'+gid);
+    var arr=document.getElementById('arr_'+gid);
+    if(!el)return;
+    var hidden=el.style.display==='none';
+    el.style.display=hidden?'flex':'none';
+    if(arr)arr.style.transform=hidden?'rotate(0deg)':'rotate(-90deg)';
 }
-function applyCustom() {
-    var u = new URL(location);
-    u.searchParams.set('period', 'custom');
-    u.searchParams.set('from', document.getElementById('cfrom').value);
-    u.searchParams.set('to', document.getElementById('cto').value);
-    location.href = u;
+function openSidebar(){
+    document.getElementById('sidebar').classList.add('open');
+    document.getElementById('sbBackdrop').classList.add('show');
 }
-function toggleGroup(el) {
-    var g = el.dataset.group;
-    var arrow = el.querySelector('span');
-    var rows = document.querySelectorAll('tr.stat-row[data-group="'+g+'"]');
-    var hidden = rows[0] && rows[0].style.display === 'none';
-    rows.forEach(function(r){ r.style.display = hidden ? '' : 'none'; });
-    arrow.innerHTML = hidden ? '&#9660;' : '&#9654;';
+function closeSidebar(){
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sbBackdrop').classList.remove('show');
 }
-var sortDir = {};
-function sortTable(colIdx, type) {
-    var body = document.getElementById('statsBody');
-    var rows = Array.from(body.querySelectorAll('tr.stat-row'));
-    var dir = sortDir[colIdx] === 'asc' ? 'desc' : 'asc';
-    sortDir[colIdx] = dir;
-    rows.sort(function(a,b){
-        var av = a.children[colIdx] ? a.children[colIdx].textContent.trim() : '';
-        var bv = b.children[colIdx] ? b.children[colIdx].textContent.trim() : '';
-        if (type === 'num') {
-            av = parseFloat(av) || 0;
-            bv = parseFloat(bv) || 0;
-            return dir === 'asc' ? av - bv : bv - av;
-        }
-        return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+function filterPeople(q){
+    q=q.toLowerCase().trim();
+    var items=document.querySelectorAll('.person-item');
+    items.forEach(function(it){
+        var n=it.querySelector('.pi-name');
+        if(!n)return;
+        it.style.display=n.textContent.toLowerCase().includes(q)?'':'none';
     });
-    // Remove group headers
-    body.querySelectorAll('tr.group-header').forEach(function(h){ h.remove(); });
-    // Re-append rows (without group headers for simplicity after sort)
-    rows.forEach(function(r){ body.appendChild(r); });
 }
-// Show custom range if active
-if ('${period}' === 'custom') { document.getElementById('customRange').style.display = 'flex'; }
 </script>
 </body>
 </html>`);
