@@ -1350,7 +1350,16 @@ app.get('/stats', async (req, res) => {
     const nextDate = toISOLocal(nd);
 
     try {
-        const allShifts = await loadAllShifts(false);
+        const rawShifts = await loadAllShifts(false);
+
+        // Dedupe: same shift can appear in both Schedule sheet and ManualShifts.
+        // Prefer ManualShifts (it overrides the planner). Key = Date|Name|Product|Start|End.
+        const _dedupMap = {};
+        rawShifts.forEach(s => {
+            const key = s.Date + '|' + s.Name + '|' + (s.Product || '') + '|' + s.Start + '|' + s.End;
+            if (!_dedupMap[key] || s._manual) _dedupMap[key] = s;
+        });
+        const allShifts = Object.values(_dedupMap);
 
         // Classify shift type by start hour
         function classifyShift(shift) {
