@@ -1636,7 +1636,11 @@ a{text-decoration:none;color:inherit;}
 
 /* Layout shell */
 .shell{display:flex;min-height:100vh;}
-.sidebar{width:280px;background:#0d0e14;border-right:1px solid #15171f;display:flex;flex-direction:column;position:fixed;left:0;top:0;bottom:0;overflow-y:auto;z-index:10;}
+.sidebar{width:280px;background:#0d0e14;border-right:1px solid #15171f;display:flex;flex-direction:column;position:fixed;left:0;top:0;bottom:0;overflow-y:auto;z-index:10;scrollbar-width:thin;scrollbar-color:rgba(96,165,250,0.35) transparent;}
+.sidebar::-webkit-scrollbar{width:6px;}
+.sidebar::-webkit-scrollbar-track{background:transparent;}
+.sidebar::-webkit-scrollbar-thumb{background:rgba(96,165,250,0.3);border-radius:3px;}
+.sidebar::-webkit-scrollbar-thumb:hover{background:rgba(96,165,250,0.55);}
 .main{margin-left:280px;flex:1;min-width:0;background:radial-gradient(ellipse 1100px 600px at 20% -10%, rgba(96,165,250,0.14) 0%, transparent 55%), radial-gradient(ellipse 900px 500px at 95% 5%, rgba(59,130,246,0.10) 0%, transparent 55%), radial-gradient(ellipse 800px 500px at 50% 110%, rgba(139,92,246,0.07) 0%, transparent 60%), linear-gradient(180deg, #0b1220 0%, #0a0f1c 40%, #090d17 100%);position:relative;}
 .main::before{content:'';position:fixed;top:0;left:280px;right:0;bottom:0;background-image:linear-gradient(rgba(96,165,250,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(96,165,250,0.035) 1px, transparent 1px);background-size:48px 48px;pointer-events:none;mask-image:radial-gradient(ellipse at center, rgba(0,0,0,0.55) 0%, transparent 75%);-webkit-mask-image:radial-gradient(ellipse at center, rgba(0,0,0,0.55) 0%, transparent 75%);z-index:0;}
 .main > *{position:relative;z-index:1;}
@@ -1674,7 +1678,7 @@ a{text-decoration:none;color:inherit;}
 .person-item.active{background:linear-gradient(90deg,rgba(96,165,250,0.16),rgba(59,130,246,0.06));color:#fff;box-shadow:inset 2px 0 0 #60a5fa;}
 .pi-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald';font-weight:700;color:#0a0b10;font-size:0.78rem;flex-shrink:0;}
 .pi-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}
-.pi-hrs{font-size:0.65rem;color:#4a5060;font-weight:600;font-family:'Oswald';letter-spacing:0.5px;}
+.pi-hrs{font-size:0.65rem;color:#4a5060;font-weight:600;font-family:'Oswald';letter-spacing:0.5px;flex-shrink:0;}
 .person-item.active .pi-hrs{color:#60a5fa;}
 
 /* Main topbar */
