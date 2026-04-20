@@ -1004,6 +1004,7 @@ app.post('/add-shift', async (req, res) => {
             if (auditSheet) await auditSheet.addRow({ Timestamp: new Date().toISOString(), Jmeno: req.user.jmeno, Email: req.user.email, Role: req.user.role, Location: req.user.location||'', Action: 'ADD_SHIFT|' + req.body.name + '|' + req.body.product + '|' + req.body.date });
         } catch(e) {}
         invalidateCache();
+        sendSlackMessage(':heavy_plus_sign: *Shift added* by ' + req.user.jmeno + ': ' + req.body.name + ' - ' + req.body.product + ' on ' + req.body.date + ' (' + req.body.start + '-' + req.body.end + ')');
         notifyShiftChange(req.user.jmeno, req.body.name, 'added shift', req.body.product + ' on ' + req.body.date + ' (' + req.body.start + '-' + req.body.end + ')');
         res.json({ success: true });
     } catch(e) { res.status(500).send(e.message); }
@@ -1099,6 +1100,7 @@ app.post('/update-shift', async (req, res) => {
         } catch(e) {}
 
         invalidateCache();
+        sendSlackMessage(':pencil2: *Shift edited* by ' + req.user.jmeno + ': ' + (name || originalName) + ' - ' + (product || '') + ' on ' + (date || originalDate) + ' (' + start + '-' + end + ')');
         notifyShiftChange(req.user.jmeno, name || originalName, 'edited shift', (product || '') + ' on ' + (date || originalDate) + ' (' + start + '-' + end + ')');
         res.json({ success: true, found: true });
     } catch(e) { res.status(500).send(e.message); }
