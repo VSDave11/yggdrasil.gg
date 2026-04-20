@@ -1312,14 +1312,10 @@ app.post('/api/slack-subscriptions', async (req, res) => {
 app.get('/stats', async (req, res) => {
     if (!req.user) return res.redirect('/');
 
-    const isAdmin = req.user.role === 'Admin';
-    const isTL = peopleHierarchy.find(g => g.label === 'Team Leaders')?.members.includes(req.user.jmeno);
-    const canSeeAll = isAdmin || isTL;
+    // Stats visible to everyone — every user sees full team data (same as admin)
+    const canSeeAll = true;
 
-    // Selected person — if no query, non-admin sees themselves
-    let selectedPerson = req.query.person || (canSeeAll ? null : req.user.jmeno);
-    // Block non-admins from seeing others
-    if (!canSeeAll && selectedPerson !== req.user.jmeno) selectedPerson = req.user.jmeno;
+    let selectedPerson = req.query.person || null;
 
     // Anchor date
     const anchorDate = req.query.date ? new Date(req.query.date) : new Date();
