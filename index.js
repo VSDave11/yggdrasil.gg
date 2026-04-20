@@ -196,7 +196,7 @@ async function loadSlackData() {
 }
 
 // Lima members (CET -6h) — get dual-timezone suffix in messages
-const LIMA_MEMBERS = new Set(["Andres","Christian C.","David Z.","Flabio T.","Francesco","Franco M.","Gustavo P.","Hadi B.","James H.","Jose C.","Martin M. M.","Santiago B.","William M."]);
+const LIMA_MEMBERS = new Set(["Adrian M.","Andres","Christian C.","David Z.","Flabio T.","Francesco","Franco M.","Gustavo P.","Hadi B.","James H.","Jose C.","Martin M. M.","Santiago B.","William M."]);
 
 function shiftLimaTime(hhmm) {
     if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return hhmm;
@@ -288,6 +288,7 @@ const personColors = {
     "Tadeáš F.":              "#4fc3f7",
     "Tomáš M.":               "#81d4fa",
     "Viet":                   "#29b6f6",
+    "Adrian M.":              "#ff7043",
     "Andres":                 "#ff5722",
     "Christian C.":            "#f4511e",
     "David Z.":               "#e64a19",
@@ -324,7 +325,7 @@ const peopleHierarchy = [
     { label: "Team Leaders",            color: "#4caf50", target: 20, members: ["Lukáš Novotný", "FIlip Sklenička", "Jindřich Lacina", "David Tročino", "David Lamač", "Tomáš Komenda", "Dominik Chvátal", "Marcelo Goto"] },
     { label: "Title Experts",           color: "#9c27b0", target: 24, members: ["Adam Zach", "Andrej Rybalka", "Ivan Čitári", "Jan Bouška", "Jan Kubelka", "Kevin Rojas", "Ladislav Bánský", "Richard Mojš", "Robert Šobíšek", "Vojtěch Malár", "Benjamin Drzymalla"] },
     { label: "Traders - Europe",        color: "#8bc34a", target: 40, members: ["Denis M.", "Jakub K.", "Jan K.", "Jiří K.", "Lukáš T.", "Marek M.", "Martin J.", "Martin N.", "Matěj K.", "Matyáš P.", "Michal F.", "Michal P.", "Michal W.", "Patrik Ř.", "Petr H.", "Petr R.", "Przemyslaw K.", "Sebastian W.", "Stanislav U.", "Tadeáš F.", "Tomáš M.", "Viet"] },
-    { label: "Traders - Lima",          color: "#ff5722", target: 40, members: ["Andres", "Christian C.", "David Z.", "Flabio T.", "Francesco", "Franco M.", "Gustavo P.", "Hadi B.", "James H.", "Jose C.", "Martin M. M.", "Santiago B.", "William M."] }
+    { label: "Traders - Lima",          color: "#ff5722", target: 40, members: ["Adrian M.", "Andres", "Christian C.", "David Z.", "Flabio T.", "Francesco", "Franco M.", "Gustavo P.", "Hadi B.", "James H.", "Jose C.", "Martin M. M.", "Santiago B.", "William M."] }
 ];
 
 const productMapping = [
