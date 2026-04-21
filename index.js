@@ -681,6 +681,282 @@ async function loadCapabilities() {
     return result;
 }
 
+// ========================================================================
+// SCHEDULE GENERATOR — prompt builder + hard-constraint validator
+// Cil: vygenerovat valid month schedule pro 1 produkt nebo cely mesic.
+// Nejdriv postavim prompt + validator, az bude ANTHROPIC_API_KEY, volame API.
+// ========================================================================
+
+function parseMonthLabel(label) {
+    // "June 2026" -> { year: 2026, month: 6, monthName: "June" }
+    const parts = label.trim().split(/\s+/);
+    if (parts.length !== 2) return null;
+    const monthMap = {January:1,February:2,March:3,April:4,May:5,June:6,July:7,August:8,September:9,October:10,November:11,December:12};
+    const m = monthMap[parts[0]];
+    const y = parseInt(parts[1]);
+    if (!m || !y) return null;
+    return { year: y, month: m, monthName: parts[0] };
+}
+
+function getMonthDates(year, month) {
+    // Vraci vsechny dny mesice s ISO datem, dayOfWeek a isWeekend
+    const dates = [];
+    const last = new Date(year, month, 0).getDate();
+    const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    for (let d = 1; d <= last; d++) {
+        const dt = new Date(Date.UTC(year, month - 1, d));
+        const iso = dt.toISOString().slice(0, 10);
+        const dow = dt.getUTCDay();
+        dates.push({ date: iso, dayName: dayNames[dow], dow, isWeekend: dow === 0 || dow === 6 });
+    }
+    return dates;
+}
+
+function getProductMeta(productName) {
+    return productMapping.find(p => p.name === productName) || null;
+}
+
+function buildGeneratorPrompt({ monthLabel, product, capabilities, existingShifts, rules }) {
+    const parsed = parseMonthLabel(monthLabel);
+    if (!parsed) throw new Error('Nevalidni month label: ' + monthLabel);
+    const dates = getMonthDates(parsed.year, parsed.month);
+    const pm = getProductMeta(product);
+    if (!pm) throw new Error('Produkt nenalezen: ' + product);
+
+    // eligible people for this product
+    const eligible = (capabilities.byProduct[product] || []).filter(name => capabilities.personMeta[name]);
+    const eligibleWithMeta = eligible.map(name => ({
+        name,
+        group: capabilities.personMeta[name].group,
+        weeklyTargetHours: capabilities.personMeta[name].weeklyTarget
+    }));
+
+    // existing shifts relevant to this month (vacations, RIP, shifts on other products)
+    const monthPrefix = parsed.year + '-' + String(parsed.month).padStart(2,'0');
+    const relevantExisting = existingShifts
+        .filter(s => s.Date && s.Date.startsWith(monthPrefix))
+        .map(s => ({
+            date: s.Date,
+            person: s.Name,
+            product: s.Product,
+            start: s.Start,
+            end: s.End,
+            isVacation: s.Product === 'Vacation' || s.Product === 'RIP'
+        }));
+
+    const slotDescriptions = pm.slots.map((s, i) => {
+        const kind = i === 0 ? 'night' : (i === 1 ? 'morning' : 'afternoon');
+        return { slotIndex: i, kind, start: s.s, end: s.e };
+    });
+
+    const systemPrompt = `You are a shift scheduler for Oddin.gg's esports trading department.
+
+Your job: produce a valid monthly schedule for a single product. Cover every 8-hour slot of every day. Assign exactly one person per slot. Respect all hard constraints. Minimise soft-constraint violations.
+
+HARD CONSTRAINTS (must never be violated — the schedule is rejected if any fail):
+H1. Every date in the month has exactly 3 slots filled: night (slotIndex 0), morning (slotIndex 1), afternoon (slotIndex 2).
+H2. The assigned person must appear in the "eligible" list for this product.
+H3. The person must NOT have an existing Vacation or RIP shift on that date (see existingShifts).
+H4. A person must NOT work both morning (slot 1) and night (slot 0) on the same calendar date across ANY product (check existingShifts + your own output).
+H5. A person must NOT work more than 7 consecutive calendar days across ALL products combined.
+H6. If a person already has a shift on another product on the same date, do NOT schedule them on this product the same date.
+
+SOFT CONSTRAINTS (minimise, but acceptable in limited amount):
+S1. Each person should land within ±8 hours of their weekly target over the month (pro-rated).
+S2. Avoid afternoon→next-morning transitions (min 12h rest between consecutive shifts).
+S3. Weekend shifts distributed fairly — no single person should work more than 70% of weekend slots this month.
+S4. Lima and Europe groups should share weekend slots roughly equally.
+
+OUTPUT FORMAT (strict — JSON only, no prose before/after):
+{
+  "shifts": [
+    {"date": "YYYY-MM-DD", "slotIndex": 0, "person": "Full Name"},
+    ...
+  ],
+  "notes": "Short summary of tradeoffs and any soft violations"
+}
+
+Return 3 shifts per day (morning/afternoon/night) for every day in the month. Total = daysInMonth × 3.`;
+
+    const userPayload = {
+        task: 'Generate full-month schedule for one product',
+        monthLabel,
+        year: parsed.year,
+        month: parsed.month,
+        product,
+        slots: slotDescriptions,
+        daysInMonth: dates.length,
+        dates,
+        eligiblePeople: eligibleWithMeta,
+        existingShifts: relevantExisting,
+        customRules: rules || {}
+    };
+
+    return {
+        system: systemPrompt,
+        user: 'Here is the structured input. Return only the JSON schedule.\n\n' + JSON.stringify(userPayload, null, 2)
+    };
+}
+
+// --- VALIDATOR ---
+
+function validateGeneratedSchedule(generated, { product, capabilities, existingShifts, monthLabel }) {
+    const errors = [];
+    const warnings = [];
+    const parsed = parseMonthLabel(monthLabel);
+    if (!parsed) { errors.push({ code: 'BAD_MONTH', msg: 'Invalid month label' }); return { errors, warnings }; }
+    const dates = getMonthDates(parsed.year, parsed.month);
+    const dateSet = new Set(dates.map(d => d.date));
+    const eligible = new Set((capabilities.byProduct[product] || []));
+
+    const shifts = Array.isArray(generated.shifts) ? generated.shifts : [];
+
+    // H1: coverage — every date × 3 slots
+    const seen = {};
+    dates.forEach(d => seen[d.date] = { 0: null, 1: null, 2: null });
+    shifts.forEach((s, idx) => {
+        if (!dateSet.has(s.date)) {
+            errors.push({ code: 'DATE_OUTSIDE_MONTH', msg: 'Shift #' + idx + ' has date ' + s.date + ' not in ' + monthLabel });
+            return;
+        }
+        if (![0,1,2].includes(s.slotIndex)) {
+            errors.push({ code: 'BAD_SLOT', msg: 'Shift #' + idx + ' slotIndex=' + s.slotIndex });
+            return;
+        }
+        if (seen[s.date][s.slotIndex] !== null) {
+            errors.push({ code: 'DUPLICATE_SLOT', msg: 'Duplicate assignment for ' + s.date + ' slot ' + s.slotIndex });
+        }
+        seen[s.date][s.slotIndex] = s.person;
+    });
+    dates.forEach(d => {
+        [0,1,2].forEach(sl => {
+            if (seen[d.date][sl] === null) {
+                errors.push({ code: 'UNCOVERED_SLOT', msg: 'Missing person for ' + d.date + ' slot ' + sl });
+            }
+        });
+    });
+
+    // H2: eligibility
+    shifts.forEach((s, idx) => {
+        if (!eligible.has(s.person)) {
+            errors.push({ code: 'NOT_ELIGIBLE', msg: s.person + ' cannot work ' + product + ' (shift #' + idx + ')' });
+        }
+    });
+
+    // H3: vacation clash
+    const monthPrefix = parsed.year + '-' + String(parsed.month).padStart(2,'0');
+    const vacByPersonDate = {};
+    existingShifts.forEach(ex => {
+        if (!ex.Date || !ex.Date.startsWith(monthPrefix)) return;
+        if (ex.Product === 'Vacation' || ex.Product === 'RIP') {
+            const key = ex.Name + '|' + ex.Date;
+            vacByPersonDate[key] = ex.Product;
+        }
+    });
+    shifts.forEach(s => {
+        const key = s.person + '|' + s.date;
+        if (vacByPersonDate[key]) {
+            errors.push({ code: 'VACATION_CLASH', msg: s.person + ' is on ' + vacByPersonDate[key] + ' on ' + s.date });
+        }
+    });
+
+    // H4: morning + night same day (across all products)
+    // Build per-person-per-date slot map from BOTH existingShifts and generated
+    const personDateSlots = {}; // key = name|date, val = Set of {night, morning, afternoon}
+    function addSlot(name, date, kind) {
+        const key = name + '|' + date;
+        if (!personDateSlots[key]) personDateSlots[key] = new Set();
+        personDateSlots[key].add(kind);
+    }
+    function classifyExistingSlot(start) {
+        // crude: start < 10 -> morning, 10-18 -> afternoon, else night
+        if (!start || !/^\d{1,2}:/.test(start)) return null;
+        const h = parseInt(start.split(':')[0]);
+        if (h >= 20 || h < 6) return 'night';
+        if (h >= 6 && h < 13) return 'morning';
+        return 'afternoon';
+    }
+    existingShifts.forEach(ex => {
+        if (!ex.Date || !ex.Date.startsWith(monthPrefix)) return;
+        if (ex.Product === 'Vacation' || ex.Product === 'RIP') return;
+        const kind = classifyExistingSlot(ex.Start);
+        if (kind) addSlot(ex.Name, ex.Date, kind);
+    });
+    shifts.forEach(s => {
+        const kind = s.slotIndex === 0 ? 'night' : (s.slotIndex === 1 ? 'morning' : 'afternoon');
+        addSlot(s.person, s.date, kind);
+    });
+    Object.entries(personDateSlots).forEach(([key, set]) => {
+        if (set.has('morning') && set.has('night')) {
+            const [name, date] = key.split('|');
+            errors.push({ code: 'MORNING_NIGHT_SAME_DAY', msg: name + ' has both morning and night on ' + date });
+        }
+    });
+
+    // H5: max 7 consecutive days
+    const personDays = {};
+    Object.keys(personDateSlots).forEach(key => {
+        const [name, date] = key.split('|');
+        if (!personDays[name]) personDays[name] = new Set();
+        personDays[name].add(date);
+    });
+    Object.entries(personDays).forEach(([name, daySet]) => {
+        const sorted = [...daySet].sort();
+        let run = 1;
+        for (let i = 1; i < sorted.length; i++) {
+            const prev = new Date(sorted[i-1] + 'T12:00:00Z');
+            const cur = new Date(sorted[i] + 'T12:00:00Z');
+            const diffDays = Math.round((cur - prev) / 86400000);
+            if (diffDays === 1) {
+                run++;
+                if (run > 7) {
+                    errors.push({ code: 'CONSECUTIVE_DAYS', msg: name + ' works ' + run + ' consecutive days ending ' + sorted[i] });
+                }
+            } else {
+                run = 1;
+            }
+        }
+    });
+
+    // S1: weekly hour target (soft) — approximate with 8h per shift
+    const personHours = {};
+    shifts.forEach(s => {
+        personHours[s.person] = (personHours[s.person] || 0) + 8;
+    });
+    // Plus existing shifts for this person in the same month
+    existingShifts.forEach(ex => {
+        if (!ex.Date || !ex.Date.startsWith(monthPrefix)) return;
+        if (ex.Product === 'Vacation' || ex.Product === 'RIP') return;
+        personHours[ex.Name] = (personHours[ex.Name] || 0) + 8;
+    });
+    const weeksInMonth = dates.length / 7;
+    Object.entries(personHours).forEach(([name, hrs]) => {
+        const meta = capabilities.personMeta[name];
+        if (!meta) return;
+        const monthTarget = meta.weeklyTarget * weeksInMonth;
+        const delta = hrs - monthTarget;
+        if (Math.abs(delta) > monthTarget * 0.2) {
+            warnings.push({ code: 'HOURS_OFF_TARGET', msg: name + ' has ' + hrs + 'h vs target ' + monthTarget.toFixed(0) + 'h (delta ' + (delta > 0 ? '+' : '') + delta.toFixed(0) + 'h)' });
+        }
+    });
+
+    // S3: weekend distribution
+    const weekendSlots = dates.filter(d => d.isWeekend).length * 3;
+    const personWeekendCount = {};
+    shifts.forEach(s => {
+        const d = dates.find(dd => dd.date === s.date);
+        if (d && d.isWeekend) personWeekendCount[s.person] = (personWeekendCount[s.person] || 0) + 1;
+    });
+    Object.entries(personWeekendCount).forEach(([name, cnt]) => {
+        const pct = cnt / weekendSlots;
+        if (pct > 0.7) {
+            warnings.push({ code: 'WEEKEND_HOGGING', msg: name + ' covers ' + (pct*100).toFixed(0) + '% of weekend slots' });
+        }
+    });
+
+    return { errors, warnings };
+}
+
 // --- POMOCNÉ FUNKCE ---
 
 function toISOLocal(date) {
@@ -1173,6 +1449,29 @@ app.get('/api/schedule-sheets', async (req, res) => {
             });
         res.json(sheets);
     } catch(e) { res.json([]); }
+});
+
+// Generator preview (admin-only) — postavi prompt bez volani Claude, vraci payload k inspekci
+// Usage: GET /api/generate-preview?month=June%202026&product=Valhalla%20Cup%20A
+app.get('/api/generate-preview', async (req, res) => {
+    if (!req.user || req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin only' });
+    const monthLabel = req.query.month;
+    const product = req.query.product;
+    if (!monthLabel || !product) return res.status(400).json({ error: 'Missing ?month= and/or ?product=' });
+    try {
+        const caps = await loadCapabilities();
+        const allShifts = await loadAllShifts(false);
+        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: {} });
+        res.json({
+            monthLabel,
+            product,
+            eligibleCount: (caps.byProduct[product] || []).length,
+            promptSystemLength: prompt.system.length,
+            promptUserLength: prompt.user.length,
+            promptSystem: prompt.system,
+            promptUserPreview: prompt.user.slice(0, 4000) + (prompt.user.length > 4000 ? '\n... [truncated — full prompt is ' + prompt.user.length + ' chars]' : '')
+        });
+    } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
 // Capabilities debug endpoint (admin-only) — vraci parsovany Capabilities sheet
