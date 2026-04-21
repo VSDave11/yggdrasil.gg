@@ -405,7 +405,7 @@ const personColors = {
     "Lukáš Novotný":          "#4caf50",
     "FIlip Sklenička":        "#009688",
     "Jindřich Lacina":  "#00897b",
-    "David Tročino":          "#43a047",
+    "David Trocino":          "#43a047",
     "David Lamač":            "#66bb6a",
     "Tomáš Komenda":          "#26a69a",
     "Dominik Chvátal":        "#2e7d32",
@@ -477,7 +477,7 @@ const peopleHierarchy = [
     { label: "Head of Trading - eSims", color: "#fbc02d", target: 0,  members: ["David Winkler"] },
     { label: "Quality Assurance",       color: "#03a9f4", target: 16, members: ["Ondřej Merxbauer"] },
     { label: "Master Scheduler",        color: "#e91e63", target: 24, members: ["David Kuchař"] },
-    { label: "Team Leaders",            color: "#4caf50", target: 20, members: ["Lukáš Novotný", "FIlip Sklenička", "Jindřich Lacina", "David Tročino", "David Lamač", "Tomáš Komenda", "Dominik Chvátal", "Marcelo Goto"] },
+    { label: "Team Leaders",            color: "#4caf50", target: 20, members: ["Lukáš Novotný", "FIlip Sklenička", "Jindřich Lacina", "David Trocino", "David Lamač", "Tomáš Komenda", "Dominik Chvátal", "Marcelo Goto"] },
     { label: "Title Experts",           color: "#9c27b0", target: 24, members: ["Adam Zach", "Andrej Rybalka", "Ivan Čitári", "Jan Bouška", "Jan Kubelka", "Kevin Rojas", "Ladislav Bánský", "Richard Mojš", "Robert Šobíšek", "Vojtěch Malár", "Benjamin Drzymalla"] },
     { label: "Traders - Europe",        color: "#8bc34a", target: 40, members: ["Denis M.", "Jakub K.", "Jan K.", "Jiří K.", "Lukáš T.", "Marek M.", "Martin J.", "Martin N.", "Matěj K.", "Matyáš P.", "Michal F.", "Michal P.", "Michal W.", "Patrik Ř.", "Petr H.", "Petr R.", "Przemyslaw K.", "Sebastian W.", "Stanislav U.", "Tadeáš F.", "Tomáš M.", "Viet"] },
     { label: "Traders - Lima",          color: "#ff5722", target: 40, members: ["Adrian M.", "Andres", "Christian C.", "David Z.", "Flabio T.", "Francesco", "Franco M.", "Gustavo P.", "Hadi B.", "James H.", "Jose C.", "Martin M. M.", "Santiago B.", "William M."] }
@@ -966,7 +966,7 @@ app.get('/export-csv', async (req, res) => {
     const userRole = req.user.role;
 
     // Zkontroluj hierarchii v req - musime ji znat
-    const tlMembers = ["Lukáš Novotný", "FIlip Sklenička", "Jindřich Lacina", "David Tročino", "David Lamač", "Tomáš Komenda", "Dominik Chvátal", "Marcelo Goto"];
+    const tlMembers = ["Lukáš Novotný", "FIlip Sklenička", "Jindřich Lacina", "David Trocino", "David Lamač", "Tomáš Komenda", "Dominik Chvátal", "Marcelo Goto"];
     const canExport = allowedNames.includes(userName) || allowedRoles.includes(userRole) || tlMembers.includes(userName);
     if (!canExport) return res.status(403).send('Access denied');
 
@@ -3063,7 +3063,7 @@ app.get('/dashboard', async (req, res) => {
         <div class="mini-calendar" id="miniCal"></div>
 
         <button class="add-btn" onclick="openAddModal()">+ ADD NEW </button>
-        ${(['David Winkler','Ondřej Merxbauer'].includes(req.user.jmeno) || req.user.role === 'Admin' || ['Lukáš Novotný', 'FIlip Sklenička', 'Jindřich Lacina', 'David Tročino', 'David Lamač', 'Tomáš Komenda', 'Dominik Chvátal', 'Marcelo Goto'].includes(req.user.jmeno)) ? '<button onclick="openExportModal()" style="background:rgba(76,175,80,0.1);color:#66bb6a;border:1px solid rgba(76,175,80,0.3);padding:7px;width:100%;cursor:pointer;font-weight:bold;margin-bottom:6px;border-radius:6px;font-size:0.72rem;transition:0.15s;" onmouseover="this.style.background=\'rgba(76,175,80,0.2)\'" onmouseout="this.style.background=\'rgba(76,175,80,0.1)\'">&#128190; EXPORT CSV</button>' : ''}
+        ${(['David Winkler','Ondřej Merxbauer'].includes(req.user.jmeno) || req.user.role === 'Admin' || ['Lukáš Novotný', 'FIlip Sklenička', 'Jindřich Lacina', 'David Trocino', 'David Lamač', 'Tomáš Komenda', 'Dominik Chvátal', 'Marcelo Goto'].includes(req.user.jmeno)) ? '<button onclick="openExportModal()" style="background:rgba(76,175,80,0.1);color:#66bb6a;border:1px solid rgba(76,175,80,0.3);padding:7px;width:100%;cursor:pointer;font-weight:bold;margin-bottom:6px;border-radius:6px;font-size:0.72rem;transition:0.15s;" onmouseover="this.style.background=\'rgba(76,175,80,0.2)\'" onmouseout="this.style.background=\'rgba(76,175,80,0.1)\'">&#128190; EXPORT CSV</button>' : ''}
         ${req.user && req.user.role === 'Admin' ? `
         <button onclick="openSyncModal()" style="background:rgba(251,192,45,0.08);color:#fbc02d;border:1px solid rgba(251,192,45,0.25);padding:9px;width:100%;cursor:pointer;font-weight:bold;margin-bottom:6px;border-radius:6px;font-size:0.75rem;transition:0.15s;" onmouseover="this.style.background='rgba(251,192,45,0.15)'" onmouseout="this.style.background='rgba(251,192,45,0.08)'" id="syncBtn">SYNC WITH SCHEDULE</button>
         <button onclick="openDeleteMonth()" style="background:rgba(255,68,68,0.06);color:#ff6b6b;border:1px solid rgba(255,68,68,0.2);padding:7px;width:100%;cursor:pointer;font-weight:bold;margin-bottom:16px;border-radius:6px;font-size:0.72rem;transition:0.15s;" onmouseover="this.style.background='rgba(255,68,68,0.15)'" onmouseout="this.style.background='rgba(255,68,68,0.06)'">DELETE ALL SHIFTS THIS MONTH</button>
