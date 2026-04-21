@@ -242,6 +242,161 @@ async function notifyShiftChange(actionBy, targetName, verb, details, start, end
     await Promise.allSettled(promises);
 }
 
+// --- BAMBOO HR VACATION SYNC ---
+const BAMBOOHR_API_KEY   = process.env.BAMBOOHR_API_KEY   || '';
+const BAMBOOHR_SUBDOMAIN = process.env.BAMBOOHR_SUBDOMAIN || '';
+
+function bambooRequest(path) {
+    return new Promise((resolve, reject) => {
+        if (!BAMBOOHR_API_KEY || !BAMBOOHR_SUBDOMAIN) {
+            return reject(new Error('BambooHR not configured'));
+        }
+        const https = require('https');
+        const auth = Buffer.from(BAMBOOHR_API_KEY + ':x').toString('base64');
+        const req = https.request({
+            hostname: 'api.bamboohr.com',
+            path: '/api/gateway.php/' + BAMBOOHR_SUBDOMAIN + path,
+            method: 'GET',
+            headers: { 'Authorization': 'Basic ' + auth, 'Accept': 'application/json' }
+        }, res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 400) return reject(new Error('Bamboo HTTP ' + res.statusCode + ': ' + data.slice(0,200)));
+                try { resolve(JSON.parse(data)); } catch(e) { reject(new Error('Bamboo JSON parse: ' + e.message)); }
+            });
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+let _lastBambooSync = 0;
+const BAMBOO_SYNC_MIN_INTERVAL = 30 * 1000; // 30s throttle
+
+async function syncBambooVacations(forceIgnoreThrottle) {
+    if (!BAMBOOHR_API_KEY || !BAMBOOHR_SUBDOMAIN) {
+        console.log('[BAMBOO] Skipped — not configured');
+        return { added: 0, removed: 0, skipped: 'not-configured' };
+    }
+    if (!forceIgnoreThrottle && (Date.now() - _lastBambooSync) < BAMBOO_SYNC_MIN_INTERVAL) {
+        console.log('[BAMBOO] Skipped — throttled (<30s since last sync)');
+        return { added: 0, removed: 0, skipped: 'throttled' };
+    }
+    _lastBambooSync = Date.now();
+    try {
+        // Window: 14 days back, 180 days forward
+        const today = new Date();
+        const startD = new Date(today); startD.setDate(startD.getDate() - 14);
+        const endD   = new Date(today); endD.setDate(endD.getDate() + 180);
+        const startStr = toISOLocal(startD);
+        const endStr   = toISOLocal(endD);
+
+        // 1. Directory (employeeId -> workEmail)
+        const dir = await bambooRequest('/v1/employees/directory');
+        const emailById = {};
+        (dir.employees || []).forEach(emp => {
+            const e = (emp.workEmail || '').toString().trim().toLowerCase();
+            if (e) emailById[String(emp.id)] = e;
+        });
+        console.log('[BAMBOO] Directory: ' + Object.keys(emailById).length + ' employees w/ email');
+
+        // 2. Approved time-off requests in window
+        const requests = await bambooRequest('/v1/time_off/requests?status=approved&start=' + startStr + '&end=' + endStr);
+        console.log('[BAMBOO] Got ' + (requests.length || 0) + ' approved requests');
+
+        // 3. uzivatele (email -> jmeno) — only our team
+        await doc.loadInfo();
+        const uzSheet = doc.sheetsByTitle['uzivatele'];
+        if (!uzSheet) { console.log('[BAMBOO] No uzivatele sheet'); return { added: 0, removed: 0 }; }
+        await uzSheet.loadCells('A1:Z500');
+        let colJmeno = -1, colEmail = -1;
+        for (let c = 0; c < 15; c++) {
+            const v = uzSheet.getCell(0, c).value?.toString().trim().toLowerCase();
+            if (v === 'jmeno') colJmeno = c;
+            if (v === 'email') colEmail = c;
+        }
+        if (colJmeno < 0 || colEmail < 0) { console.log('[BAMBOO] uzivatele missing jmeno/email'); return { added: 0, removed: 0 }; }
+        const jmenoByEmail = {};
+        for (let r = 1; r < Math.min(uzSheet.rowCount, 500); r++) {
+            const em = uzSheet.getCell(r, colEmail).value?.toString().trim().toLowerCase();
+            const jm = uzSheet.getCell(r, colJmeno).value?.toString().trim();
+            if (em && jm) jmenoByEmail[em] = jm;
+        }
+        console.log('[BAMBOO] uzivatele mapped: ' + Object.keys(jmenoByEmail).length);
+
+        // 4. ManualShifts sheet
+        let manualSheet = doc.sheetsByTitle['ManualShifts'];
+        if (!manualSheet) {
+            manualSheet = await doc.addSheet({ title: 'ManualShifts', headerValues: ['Date','Name','Trading','Product','Start','End','Note','AddedBy'] });
+        }
+        const rows = await manualSheet.getRows();
+
+        // 5. Delete existing BambooHR rows in our window (in reverse to keep indices stable)
+        let removed = 0;
+        for (let i = rows.length - 1; i >= 0; i--) {
+            const r = rows[i];
+            if ((r.get('AddedBy') || '').toString().trim() !== 'BambooHR') continue;
+            const d = convertCzechDate(r.get('Date') || '');
+            if (d && d >= startStr && d <= endStr) {
+                try { await r.delete(); removed++; } catch(e) { console.error('[BAMBOO] delete err:', e.message); }
+            }
+        }
+        console.log('[BAMBOO] Removed ' + removed + ' stale rows');
+
+        // 6. Build dedup set of manual (non-Bamboo) rows for "Vacation" product
+        const freshRows = await manualSheet.getRows();
+        const manualKeys = new Set();
+        freshRows.forEach(r => {
+            if ((r.get('AddedBy') || '').toString().trim() === 'BambooHR') return;
+            const d = convertCzechDate(r.get('Date') || '');
+            const n = (r.get('Name') || '').toString().trim();
+            const p = (r.get('Product') || '').toString().trim();
+            if (d && n && p === 'Vacation') manualKeys.add(d + '|' + n);
+        });
+
+        // 7. Expand each request to per-day rows and batch-insert
+        const newRows = [];
+        for (const req of (requests || [])) {
+            const empId = String(req.employeeId || '');
+            const email = emailById[empId];
+            if (!email) continue;
+            const jmeno = jmenoByEmail[email];
+            if (!jmeno) continue; // not our team — skip silently
+            const typeName = (req.type && req.type.name) ? req.type.name : 'Time Off';
+            const empNote  = (req.notes && req.notes.employee) ? req.notes.employee.toString().slice(0,120) : '';
+            const note = 'BambooHR: ' + typeName + (empNote ? ' — ' + empNote : '');
+            const datesObj = req.dates || {};
+            Object.keys(datesObj).forEach(dateStr => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return;
+                if (dateStr < startStr || dateStr > endStr) return;
+                const amt = parseFloat(datesObj[dateStr]);
+                if (!(amt > 0)) return;
+                if (manualKeys.has(dateStr + '|' + jmeno)) return; // manual row wins
+                newRows.push({
+                    Date:    dateStr,
+                    Name:    jmeno,
+                    Trading: 'HR',
+                    Product: 'Vacation',
+                    Start:   '00:00',
+                    End:     '23:59',
+                    Note:    note,
+                    AddedBy: 'BambooHR'
+                });
+            });
+        }
+        if (newRows.length > 0) {
+            try { await manualSheet.addRows(newRows); }
+            catch(e) { console.error('[BAMBOO] addRows err:', e.message); }
+        }
+        console.log('[BAMBOO] Added ' + newRows.length + ' vacation rows');
+        return { added: newRows.length, removed };
+    } catch(e) {
+        console.error('[BAMBOO] Sync error:', e.message);
+        return { added: 0, removed: 0, error: e.message };
+    }
+}
+
 // --- BOD 5: INDIVIDUÁLNÍ BARVY KAŽDÉHO ČLOVĚKA ---
 const personColors = {
     "David Winkler":          "#fbc02d",
@@ -362,6 +517,14 @@ async function loadAllShifts(forceSync) {
     console.log('Cache MISS - nacitam z Google Sheets...');
     if (forceSync) _hiddenSheets.clear();
     await doc.loadInfo();
+
+    // BambooHR: pull approved vacations into ManualShifts before we read the sheet
+    if (forceSync && BAMBOOHR_API_KEY) {
+        try {
+            const r = await syncBambooVacations(true);
+            console.log('[SYNC] BambooHR result: +' + r.added + ' / -' + r.removed + (r.error ? ' error=' + r.error : ''));
+        } catch(e) { console.error('[SYNC] BambooHR sync threw:', e.message); }
+    }
 
     const allShifts = [];
 
@@ -950,6 +1113,16 @@ app.get('/api/schedule-sheets', async (req, res) => {
             });
         res.json(sheets);
     } catch(e) { res.json([]); }
+});
+
+// BambooHR manual sync trigger (admin-only)
+app.post('/api/bamboo-sync', async (req, res) => {
+    if (!req.user || req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin only' });
+    try {
+        const r = await syncBambooVacations(true);
+        invalidateCache();
+        res.json({ success: true, ...r });
+    } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // DEBUG endpoint
@@ -4717,4 +4890,12 @@ app.get('/dashboard', async (req, res) => {
 app.listen(PORT, () => {
     console.log('Drachir.gg active');
     loadSlackData().catch(e => console.error('Initial Slack data load failed:', e.message));
+    if (BAMBOOHR_API_KEY && BAMBOOHR_SUBDOMAIN) {
+        setTimeout(() => {
+            syncBambooVacations(true).then(r => {
+                console.log('[BAMBOO] Startup sync: +' + r.added + ' / -' + r.removed + (r.error ? ' error=' + r.error : ''));
+                invalidateCache();
+            }).catch(e => console.error('[BAMBOO] Startup sync error:', e.message));
+        }, 5000);
+    }
 });
