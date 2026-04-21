@@ -1451,6 +1451,102 @@ app.get('/api/schedule-sheets', async (req, res) => {
     } catch(e) { res.json([]); }
 });
 
+// --- CLAUDE API CALLER ---
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const ANTHROPIC_MODEL_DEFAULT = 'claude-sonnet-4-6';
+
+function callClaude({ system, userMessage, model, maxTokens }) {
+    return new Promise((resolve, reject) => {
+        if (!ANTHROPIC_API_KEY) return reject(new Error('ANTHROPIC_API_KEY not set on server'));
+        const https = require('https');
+        const body = JSON.stringify({
+            model: model || ANTHROPIC_MODEL_DEFAULT,
+            max_tokens: maxTokens || 16000,
+            system,
+            messages: [{ role: 'user', content: userMessage }]
+        });
+        const req = https.request({
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(body)
+            }
+        }, res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                if (res.statusCode >= 400) return reject(new Error('Claude HTTP ' + res.statusCode + ': ' + data.slice(0,500)));
+                try {
+                    const parsed = JSON.parse(data);
+                    resolve(parsed);
+                } catch(e) { reject(new Error('Claude JSON parse: ' + e.message)); }
+            });
+        });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+    });
+}
+
+function extractJsonFromText(text) {
+    // Claude sometimes wraps JSON in ```json ... ``` or adds prose. Extract first {...} block.
+    const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+    if (fenced) return JSON.parse(fenced[1]);
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error('No JSON object found in response');
+}
+
+// Generate schedule for one product × one month (admin-only)
+// POST body: { month: "June 2026", product: "Valhalla Cup A", model?: "claude-sonnet-4-6" }
+app.post('/api/generate-schedule', async (req, res) => {
+    if (!req.user || req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin only' });
+    if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured on server' });
+    const { month: monthLabel, product, model } = req.body || {};
+    if (!monthLabel || !product) return res.status(400).json({ error: 'Missing month/product in body' });
+
+    try {
+        const caps = await loadCapabilities();
+        const allShifts = await loadAllShifts(false);
+        if (!caps.byProduct[product]) return res.status(400).json({ error: 'Unknown product: ' + product });
+        if ((caps.byProduct[product] || []).length === 0) return res.status(400).json({ error: 'No eligible people for ' + product });
+
+        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: {} });
+        const t0 = Date.now();
+        const claudeResp = await callClaude({ system: prompt.system, userMessage: prompt.user, model });
+        const elapsed = Date.now() - t0;
+
+        const textBlock = (claudeResp.content || []).find(c => c.type === 'text');
+        if (!textBlock) return res.status(502).json({ error: 'No text block in Claude response', raw: claudeResp });
+        let generated;
+        try { generated = extractJsonFromText(textBlock.text); }
+        catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: textBlock.text.slice(0, 2000) }); }
+
+        const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: allShifts, monthLabel });
+        const usage = claudeResp.usage || {};
+
+        res.json({
+            ok: validation.errors.length === 0,
+            monthLabel,
+            product,
+            modelUsed: claudeResp.model,
+            elapsedMs: elapsed,
+            usage,
+            shiftCount: Array.isArray(generated.shifts) ? generated.shifts.length : 0,
+            generatorNotes: generated.notes || '',
+            validation,
+            shifts: generated.shifts || []
+        });
+    } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // Generator preview (admin-only) — postavi prompt bez volani Claude, vraci payload k inspekci
 // Usage: GET /api/generate-preview?month=June%202026&product=Valhalla%20Cup%20A
 app.get('/api/generate-preview', async (req, res) => {
