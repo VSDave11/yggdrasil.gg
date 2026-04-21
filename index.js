@@ -1462,14 +1462,31 @@ app.get('/api/generate-preview', async (req, res) => {
         const caps = await loadCapabilities();
         const allShifts = await loadAllShifts(false);
         const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: {} });
+        const parsed = parseMonthLabel(monthLabel);
+        const monthPrefix = parsed.year + '-' + String(parsed.month).padStart(2,'0');
+        const monthShifts = allShifts.filter(s => s.Date && s.Date.startsWith(monthPrefix));
+        const vacations = monthShifts.filter(s => s.Product === 'Vacation' || s.Product === 'RIP');
+        const vacationSummary = {};
+        vacations.forEach(v => {
+            vacationSummary[v.Name] = vacationSummary[v.Name] || { count: 0, dates: [] };
+            vacationSummary[v.Name].count++;
+            vacationSummary[v.Name].dates.push(v.Date + ' (' + v.Product + ')');
+        });
         res.json({
             monthLabel,
             product,
             eligibleCount: (caps.byProduct[product] || []).length,
             promptSystemLength: prompt.system.length,
             promptUserLength: prompt.user.length,
+            vacationsThisMonth: {
+                totalDays: vacations.length,
+                peopleOnVacation: Object.keys(vacationSummary).length,
+                bySummary: vacationSummary
+            },
+            existingShiftsInMonth: monthShifts.length,
             promptSystem: prompt.system,
-            promptUserPreview: prompt.user.slice(0, 4000) + (prompt.user.length > 4000 ? '\n... [truncated — full prompt is ' + prompt.user.length + ' chars]' : '')
+            promptUserPreview: prompt.user.slice(0, 3000) + (prompt.user.length > 3000 ? '\n... [truncated]' : ''),
+            fullPromptUserTailPreview: prompt.user.length > 3000 ? prompt.user.slice(-2000) : null
         });
     } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
