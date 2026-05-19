@@ -544,7 +544,7 @@ async function loadAllShifts(forceSync) {
         const sheet = doc.sheetsByTitle[sheetTitle];
         if (!sheet) { console.log('[SYNC] Sheet not found in doc:', sheetTitle); continue; }
         try {
-            await sheet.loadCells('A1:BC500');
+            await sheet.loadCells('A1:BG500');
             let sheetShiftCount = 0;
             for (let r = 0; r < Math.min(sheet.rowCount, 500); r++) {
                 const dateCell = sheet.getCell(r, 0);
@@ -576,6 +576,24 @@ async function loadAllShifts(forceSync) {
                         }
                     });
                 });
+
+                // OFF/Vacation kolonky BC-BG (col 54-58) — kazda non-prazdna bunka = "ten den volno"
+                for (let offCol = 54; offCol <= 58; offCol++) {
+                    const offCell = sheet.getCell(r, offCol);
+                    const offVal = offCell.value ? offCell.value.toString().trim() : '';
+                    if (offVal === '' || offVal === '-') continue;
+                    offVal.split(',').forEach(n => {
+                        const name = n.trim();
+                        if (!name) return;
+                        allShifts.push({
+                            Date: dateVal, Name: name,
+                            Trading: 'HR', Product: 'Vacation',
+                            Start: '00:00', End: '23:59',
+                            Note: 'Schedule sheet off-column',
+                            _sheet: sheetTitle, _row: r, _col: offCol
+                        });
+                    });
+                }
             }
             console.log('[SYNC] Sheet "' + sheetTitle + '": loaded ' + sheetShiftCount + ' shifts');
         } catch (sheetErr) {
@@ -1387,7 +1405,7 @@ app.get('/export-csv', async (req, res) => {
 
         for (const title of scheduleSheets) {
             const sheet = doc.sheetsByTitle[title];
-            await sheet.loadCells('A1:BC500');
+            await sheet.loadCells('A1:BG500');
             const productMapping = [
                 { name: "Valhalla Cup A", startCol: 2, trading: "FIFA", slots: [{o:0,s:'23:16',e:'07:12'},{o:1,s:'07:12',e:'15:28'},{o:2,s:'15:28',e:'23:16'}] },
                 { name: "Valhalla Cup B", startCol: 6, trading: "FIFA", slots: [{o:0,s:'23:18',e:'07:14'},{o:1,s:'07:14',e:'15:30'},{o:2,s:'15:30',e:'23:18'}] },
