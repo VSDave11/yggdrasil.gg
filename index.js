@@ -722,6 +722,26 @@ function getProductMeta(productName) {
     return productMapping.find(p => p.name === productName) || null;
 }
 
+// Coverage profile = ktere sloty + ktere dny ma generator pokrývat.
+// Default = 24/7 (vsechny 3 sloty, kazdy den)
+// 'weekdays' = pondeli az patek (dow 1-5), 'weekends' = (dow 0 a 6), 'all' = vsechny
+const productCoverage = {
+    "Table Tennis":   { slots: [0,1,2], days: 'all' },      // 24/7
+    "World of Tanks": { slots: [1],     days: 'weekdays' }, // jen ranni Po-Pa
+    "eHockey":        { slots: [1,2],   days: 'all' },      // ranni + odpoledni, kazdy den (16/7)
+};
+
+function getCoverageProfile(productName) {
+    return productCoverage[productName] || { slots: [0,1,2], days: 'all' };
+}
+
+function isDateInCoverage(dateObj, coverage) {
+    if (coverage.days === 'all') return true;
+    if (coverage.days === 'weekdays') return dateObj.dow >= 1 && dateObj.dow <= 5;
+    if (coverage.days === 'weekends') return dateObj.dow === 0 || dateObj.dow === 6;
+    return true;
+}
+
 function buildGeneratorPrompt({ monthLabel, product, capabilities, existingShifts, rules }) {
     const parsed = parseMonthLabel(monthLabel);
     if (!parsed) throw new Error('Nevalidni month label: ' + monthLabel);
@@ -752,28 +772,40 @@ function buildGeneratorPrompt({ monthLabel, product, capabilities, existingShift
             isVacation: s.Product === 'Vacation' || s.Product === 'RIP'
         }));
 
+    const coverage = getCoverageProfile(product);
+    const activeSlotSet = new Set(coverage.slots);
     const slotDescriptions = pm.slots.map((s, i) => {
         const kind = i === 0 ? 'night' : (i === 1 ? 'morning' : 'afternoon');
-        return { slotIndex: i, kind, start: s.s, end: s.e };
+        return { slotIndex: i, kind, start: s.s, end: s.e, active: activeSlotSet.has(i) };
     });
+
+    // Filtrovane datumy (jen ty, kde mame coverage)
+    const activeDates = dates.filter(d => isDateInCoverage(d, coverage));
+    const totalActiveSlots = activeDates.length * coverage.slots.length;
 
     const systemPrompt = `You are a shift scheduler for Oddin.gg's esports trading department.
 
-Your job: produce a FRESH monthly schedule for ONE product (specified below). Cover every 8-hour slot of every day. Assign exactly one person per slot. Respect all hard constraints. Minimise soft-constraint violations.
+Your job: produce a FRESH monthly schedule for ONE product (specified below). Fill only the slot/day combinations defined by the coverage profile. Assign exactly one person per active slot. Respect all hard constraints. Minimise soft-constraint violations.
+
+COVERAGE PROFILE — read carefully:
+- The product specifies which slotIndex values are ACTIVE (e.g. [1] = only morning, [0,1,2] = full 24/7, [1,2] = morning+afternoon = 16/7).
+- The product also specifies which days are covered: 'all' (every day), 'weekdays' (Mon–Fri only), 'weekends' (Sat+Sun only).
+- ONLY emit shifts for date/slot combinations that match the coverage. Do not emit shifts for inactive slots or out-of-coverage days.
+- If capacity is insufficient (allowPartialCoverage = true in payload), it is acceptable to leave some active slots empty rather than violate a hard constraint or push someone over their target.
 
 IMPORTANT — about existingShifts:
 - existingShifts represents COMMITMENTS THAT ALREADY EXIST: vacations (RIP/Vacation) and shifts on OTHER products for the same people in the same month.
-- existingShifts does NOT contain any shifts for the product you are scheduling — that product is empty and YOU must fill every slot from scratch.
-- Never copy a person from existingShifts into your output assuming "they're already scheduled". Treat existingShifts as a SET OF UNAVAILABILITIES, not as your output.
-- Your task is constructive: pick people from "eligiblePeople" and assign them to the 3 daily slots, avoiding all conflicts with existingShifts.
+- existingShifts does NOT contain any shifts for the product you are scheduling — that product is empty and YOU must fill every active slot from scratch.
+- Never copy a person from existingShifts into your output. Treat existingShifts as a SET OF UNAVAILABILITIES.
+- Your task is constructive: pick people from eligiblePeople and assign them, avoiding all conflicts.
 
-HARD CONSTRAINTS (must never be violated — the schedule is rejected if any fail):
-H1. Every date in the month has exactly 3 slots filled: night (slotIndex 0), morning (slotIndex 1), afternoon (slotIndex 2).
+HARD CONSTRAINTS (never violated — schedule rejected if any fail):
+H1. Only fill slot/day combos defined by the coverage profile. Do not invent slots outside coverage.
 H2. The assigned person MUST appear in the eligiblePeople list. Never use a name not in that list.
-H3. The person must NOT have an existing Vacation or RIP shift on that date (see existingShifts).
-H4. A person must NOT work both morning (slot 1) and night (slot 0) on the same calendar date — count across existingShifts AND your own new output.
-H5. A person must NOT work more than 7 consecutive calendar days. Track this carefully: a person who works 7 days in a row (across any combination of existingShifts + your new shifts) must rest on day 8.
-H6. If a person already has a shift on another product on the same date (per existingShifts), do NOT schedule them on this product the same date — one person, one product, one date.
+H3. The person must NOT have an existing Vacation or RIP shift on that date.
+H4. A person must NOT work both morning (slot 1) and night (slot 0) on the same calendar date — across existingShifts AND your own output.
+H5. A person must NOT work more than 7 consecutive calendar days. Combine existingShifts + your new shifts when counting.
+H6. If a person already has a shift on another product on the same date, do NOT schedule them on this product the same date.
 
 SOFT CONSTRAINTS (minimise, but acceptable in limited amount):
 S1. Each person should land within ±8 hours of their weekly target over the month (pro-rated).
@@ -790,16 +822,26 @@ OUTPUT FORMAT (strict — JSON only, no prose before/after):
   "notes": "Short summary of tradeoffs and any soft violations"
 }
 
-Return 3 shifts per day (morning/afternoon/night) for every day in the month. Total = daysInMonth × 3.`;
+The exact number of shifts to produce equals "totalSlotsToFill" in the payload (= activeDatesCount × number of activeSlots). If allowPartialCoverage is true and you cannot fill every active slot without breaking hard constraints or pushing people way over target hours, leave that slot out and mention it in "notes".`;
 
     const userPayload = {
-        task: 'Generate full-month schedule for one product',
+        task: 'Generate monthly schedule for one product (respect coverage profile)',
         monthLabel,
         year: parsed.year,
         month: parsed.month,
         product,
+        coverageProfile: {
+            activeSlots: coverage.slots,
+            days: coverage.days,
+            note: coverage.days === 'weekdays' ? 'Only Monday-Friday (dow 1-5)'
+                : coverage.days === 'weekends' ? 'Only Saturday-Sunday (dow 0 or 6)'
+                : 'Every day of the month'
+        },
         slots: slotDescriptions,
         daysInMonth: dates.length,
+        activeDatesCount: activeDates.length,
+        totalSlotsToFill: totalActiveSlots,
+        allowPartialCoverage: rules?.allowPartialCoverage === true,
         dates,
         eligiblePeople: eligibleWithMeta,
         existingShifts: relevantExisting,
@@ -814,27 +856,38 @@ Return 3 shifts per day (morning/afternoon/night) for every day in the month. To
 
 // --- VALIDATOR ---
 
-function validateGeneratedSchedule(generated, { product, capabilities, existingShifts, monthLabel }) {
+function validateGeneratedSchedule(generated, { product, capabilities, existingShifts, monthLabel, allowPartialCoverage }) {
     const errors = [];
     const warnings = [];
     const parsed = parseMonthLabel(monthLabel);
     if (!parsed) { errors.push({ code: 'BAD_MONTH', msg: 'Invalid month label' }); return { errors, warnings }; }
     const dates = getMonthDates(parsed.year, parsed.month);
-    const dateSet = new Set(dates.map(d => d.date));
+    const dateMap = new Map(dates.map(d => [d.date, d]));
     const eligible = new Set((capabilities.byProduct[product] || []));
+    const coverage = getCoverageProfile(product);
+    const activeSlotSet = new Set(coverage.slots);
 
     const shifts = Array.isArray(generated.shifts) ? generated.shifts : [];
 
-    // H1: coverage — every date × 3 slots
+    // H1: coverage — only required for ACTIVE slot/day combos
     const seen = {};
     dates.forEach(d => seen[d.date] = { 0: null, 1: null, 2: null });
     shifts.forEach((s, idx) => {
-        if (!dateSet.has(s.date)) {
+        const dateMeta = dateMap.get(s.date);
+        if (!dateMeta) {
             errors.push({ code: 'DATE_OUTSIDE_MONTH', msg: 'Shift #' + idx + ' has date ' + s.date + ' not in ' + monthLabel });
             return;
         }
         if (![0,1,2].includes(s.slotIndex)) {
             errors.push({ code: 'BAD_SLOT', msg: 'Shift #' + idx + ' slotIndex=' + s.slotIndex });
+            return;
+        }
+        if (!activeSlotSet.has(s.slotIndex)) {
+            errors.push({ code: 'SLOT_OUT_OF_COVERAGE', msg: 'Shift on ' + s.date + ' slot ' + s.slotIndex + ' — slot not in coverage profile' });
+            return;
+        }
+        if (!isDateInCoverage(dateMeta, coverage)) {
+            errors.push({ code: 'DATE_OUT_OF_COVERAGE', msg: 'Shift on ' + s.date + ' (' + dateMeta.dayName + ') — outside coverage days (' + coverage.days + ')' });
             return;
         }
         if (seen[s.date][s.slotIndex] !== null) {
@@ -843,9 +896,13 @@ function validateGeneratedSchedule(generated, { product, capabilities, existingS
         seen[s.date][s.slotIndex] = s.person;
     });
     dates.forEach(d => {
-        [0,1,2].forEach(sl => {
+        if (!isDateInCoverage(d, coverage)) return;
+        coverage.slots.forEach(sl => {
             if (seen[d.date][sl] === null) {
-                errors.push({ code: 'UNCOVERED_SLOT', msg: 'Missing person for ' + d.date + ' slot ' + sl });
+                const code = 'UNCOVERED_SLOT';
+                const msg = 'Missing person for ' + d.date + ' slot ' + sl;
+                if (allowPartialCoverage) warnings.push({ code, msg });
+                else errors.push({ code, msg });
             }
         });
     });
@@ -1526,7 +1583,7 @@ function extractJsonFromText(text) {
 app.post('/api/generate-schedule', async (req, res) => {
     if (!req.user || req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin only' });
     if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured on server' });
-    const { month: monthLabel, product, model } = req.body || {};
+    const { month: monthLabel, product, model, allowPartialCoverage } = req.body || {};
     if (!monthLabel || !product) return res.status(400).json({ error: 'Missing month/product in body' });
 
     try {
@@ -1535,7 +1592,8 @@ app.post('/api/generate-schedule', async (req, res) => {
         if (!caps.byProduct[product]) return res.status(400).json({ error: 'Unknown product: ' + product });
         if ((caps.byProduct[product] || []).length === 0) return res.status(400).json({ error: 'No eligible people for ' + product });
 
-        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: {} });
+        const apc = allowPartialCoverage === true || allowPartialCoverage === 'true';
+        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: { allowPartialCoverage: apc } });
         const t0 = Date.now();
         const claudeResp = await callClaude({ system: prompt.system, userMessage: prompt.user, model });
         const elapsed = Date.now() - t0;
@@ -1546,7 +1604,7 @@ app.post('/api/generate-schedule', async (req, res) => {
         try { generated = extractJsonFromText(textBlock.text); }
         catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: textBlock.text.slice(0, 2000) }); }
 
-        const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: allShifts, monthLabel });
+        const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: allShifts, monthLabel, allowPartialCoverage: apc });
         const usage = claudeResp.usage || {};
 
         res.json({
