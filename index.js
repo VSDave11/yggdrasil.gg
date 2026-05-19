@@ -1529,21 +1529,20 @@ app.get('/api/schedule-sheets', async (req, res) => {
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const ANTHROPIC_MODEL_DEFAULT = 'claude-sonnet-4-6';
 
-function callClaude({ system, userMessage, model, maxTokens, prefillJson }) {
+function callClaude({ system, userMessage, model, maxTokens, tools, toolChoice }) {
     return new Promise((resolve, reject) => {
         if (!ANTHROPIC_API_KEY) return reject(new Error('ANTHROPIC_API_KEY not set on server'));
         const https = require('https');
         const messages = [{ role: 'user', content: userMessage }];
-        if (prefillJson) {
-            // Force model to start with '{' — skips analysis prose, output is pure JSON.
-            messages.push({ role: 'assistant', content: '{' });
-        }
-        const body = JSON.stringify({
+        const payload = {
             model: model || ANTHROPIC_MODEL_DEFAULT,
             max_tokens: maxTokens || 16000,
             system,
             messages
-        });
+        };
+        if (Array.isArray(tools) && tools.length) payload.tools = tools;
+        if (toolChoice) payload.tool_choice = toolChoice;
+        const body = JSON.stringify(payload);
         const req = https.request({
             hostname: 'api.anthropic.com',
             path: '/v1/messages',
@@ -1602,23 +1601,55 @@ app.post('/api/generate-schedule', async (req, res) => {
         const accumExtras = Array.isArray(accumulatedShifts) ? accumulatedShifts : [];
         const combinedExisting = allShifts.concat(accumExtras);
         const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: combinedExisting, rules: { allowPartialCoverage: apc } });
+
+        // Structured-output via tool use — guarantees schema-valid JSON, no parsing fragility
+        const submitTool = {
+            name: 'submit_schedule',
+            description: 'Submit the generated schedule. Call this exactly once with the complete schedule.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    shifts: {
+                        type: 'array',
+                        description: 'One entry per filled slot. Only include active slot/day combos from the coverage profile.',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                date: { type: 'string', description: 'ISO date YYYY-MM-DD' },
+                                slotIndex: { type: 'integer', enum: [0,1,2], description: '0=night, 1=morning, 2=afternoon' },
+                                person: { type: 'string', description: 'Full name exactly as in eligiblePeople' }
+                            },
+                            required: ['date', 'slotIndex', 'person']
+                        }
+                    },
+                    notes: { type: 'string', description: 'Short summary of tradeoffs and soft violations' }
+                },
+                required: ['shifts']
+            }
+        };
+
         const t0 = Date.now();
         const claudeResp = await callClaude({
             system: prompt.system,
             userMessage: prompt.user,
             model,
             maxTokens: 32000,
-            prefillJson: true
+            tools: [submitTool],
+            toolChoice: { type: 'tool', name: 'submit_schedule' }
         });
         const elapsed = Date.now() - t0;
 
-        const textBlock = (claudeResp.content || []).find(c => c.type === 'text');
-        if (!textBlock) return res.status(502).json({ error: 'No text block in Claude response', raw: claudeResp });
-        // Because we prefilled '{', the response starts mid-JSON — prepend it back.
-        const rawText = textBlock.text.trimStart().startsWith('{') ? textBlock.text : '{' + textBlock.text;
-        let generated;
-        try { generated = extractJsonFromText(rawText); }
-        catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: rawText.slice(0, 2000), stopReason: claudeResp.stop_reason }); }
+        const toolBlock = (claudeResp.content || []).find(c => c.type === 'tool_use' && c.name === 'submit_schedule');
+        if (!toolBlock) {
+            const textBlock = (claudeResp.content || []).find(c => c.type === 'text');
+            return res.status(502).json({
+                error: 'No submit_schedule tool call in response',
+                stopReason: claudeResp.stop_reason,
+                rawText: textBlock?.text?.slice(0,2000) || '',
+                contentTypes: (claudeResp.content || []).map(c => c.type)
+            });
+        }
+        const generated = toolBlock.input;
 
         const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: combinedExisting, monthLabel, allowPartialCoverage: apc });
         const usage = claudeResp.usage || {};
