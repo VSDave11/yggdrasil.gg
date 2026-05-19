@@ -1527,7 +1527,7 @@ app.get('/api/schedule-sheets', async (req, res) => {
 
 // --- CLAUDE API CALLER ---
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const ANTHROPIC_MODEL_DEFAULT = 'claude-sonnet-4-6';
+const ANTHROPIC_MODEL_DEFAULT = 'claude-opus-4-7';
 
 function callClaude({ system, userMessage, model, maxTokens, tools, toolChoice }) {
     return new Promise((resolve, reject) => {
