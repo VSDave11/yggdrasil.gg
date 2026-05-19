@@ -731,10 +731,12 @@ function buildGeneratorPrompt({ monthLabel, product, capabilities, existingShift
         weeklyTargetHours: capabilities.personMeta[name].weeklyTarget
     }));
 
-    // existing shifts relevant to this month (vacations, RIP, shifts on other products)
+    // existing shifts relevant to this month — EXCLUDE the product we are regenerating
+    // (only vacations/RIP and shifts on OTHER products count as constraints)
     const monthPrefix = parsed.year + '-' + String(parsed.month).padStart(2,'0');
     const relevantExisting = existingShifts
         .filter(s => s.Date && s.Date.startsWith(monthPrefix))
+        .filter(s => s.Product !== product) // <-- klic: regenerujeme TENTO produkt
         .map(s => ({
             date: s.Date,
             person: s.Name,
@@ -751,15 +753,21 @@ function buildGeneratorPrompt({ monthLabel, product, capabilities, existingShift
 
     const systemPrompt = `You are a shift scheduler for Oddin.gg's esports trading department.
 
-Your job: produce a valid monthly schedule for a single product. Cover every 8-hour slot of every day. Assign exactly one person per slot. Respect all hard constraints. Minimise soft-constraint violations.
+Your job: produce a FRESH monthly schedule for ONE product (specified below). Cover every 8-hour slot of every day. Assign exactly one person per slot. Respect all hard constraints. Minimise soft-constraint violations.
+
+IMPORTANT — about existingShifts:
+- existingShifts represents COMMITMENTS THAT ALREADY EXIST: vacations (RIP/Vacation) and shifts on OTHER products for the same people in the same month.
+- existingShifts does NOT contain any shifts for the product you are scheduling — that product is empty and YOU must fill every slot from scratch.
+- Never copy a person from existingShifts into your output assuming "they're already scheduled". Treat existingShifts as a SET OF UNAVAILABILITIES, not as your output.
+- Your task is constructive: pick people from "eligiblePeople" and assign them to the 3 daily slots, avoiding all conflicts with existingShifts.
 
 HARD CONSTRAINTS (must never be violated — the schedule is rejected if any fail):
 H1. Every date in the month has exactly 3 slots filled: night (slotIndex 0), morning (slotIndex 1), afternoon (slotIndex 2).
-H2. The assigned person must appear in the "eligible" list for this product.
+H2. The assigned person MUST appear in the eligiblePeople list. Never use a name not in that list.
 H3. The person must NOT have an existing Vacation or RIP shift on that date (see existingShifts).
-H4. A person must NOT work both morning (slot 1) and night (slot 0) on the same calendar date across ANY product (check existingShifts + your own output).
-H5. A person must NOT work more than 7 consecutive calendar days across ALL products combined.
-H6. If a person already has a shift on another product on the same date, do NOT schedule them on this product the same date.
+H4. A person must NOT work both morning (slot 1) and night (slot 0) on the same calendar date — count across existingShifts AND your own new output.
+H5. A person must NOT work more than 7 consecutive calendar days. Track this carefully: a person who works 7 days in a row (across any combination of existingShifts + your new shifts) must rest on day 8.
+H6. If a person already has a shift on another product on the same date (per existingShifts), do NOT schedule them on this product the same date — one person, one product, one date.
 
 SOFT CONSTRAINTS (minimise, but acceptable in limited amount):
 S1. Each person should land within ±8 hours of their weekly target over the month (pro-rated).
