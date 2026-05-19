@@ -1583,7 +1583,7 @@ function extractJsonFromText(text) {
 app.post('/api/generate-schedule', async (req, res) => {
     if (!req.user || req.user.role !== 'Admin') return res.status(403).json({ error: 'Admin only' });
     if (!ANTHROPIC_API_KEY) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured on server' });
-    const { month: monthLabel, product, model, allowPartialCoverage } = req.body || {};
+    const { month: monthLabel, product, model, allowPartialCoverage, accumulatedShifts } = req.body || {};
     if (!monthLabel || !product) return res.status(400).json({ error: 'Missing month/product in body' });
 
     try {
@@ -1593,7 +1593,10 @@ app.post('/api/generate-schedule', async (req, res) => {
         if ((caps.byProduct[product] || []).length === 0) return res.status(400).json({ error: 'No eligible people for ' + product });
 
         const apc = allowPartialCoverage === true || allowPartialCoverage === 'true';
-        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: allShifts, rules: { allowPartialCoverage: apc } });
+        // Combine persistent existing shifts with shifts accumulated during this batch run
+        const accumExtras = Array.isArray(accumulatedShifts) ? accumulatedShifts : [];
+        const combinedExisting = allShifts.concat(accumExtras);
+        const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: combinedExisting, rules: { allowPartialCoverage: apc } });
         const t0 = Date.now();
         const claudeResp = await callClaude({ system: prompt.system, userMessage: prompt.user, model });
         const elapsed = Date.now() - t0;
@@ -1604,8 +1607,21 @@ app.post('/api/generate-schedule', async (req, res) => {
         try { generated = extractJsonFromText(textBlock.text); }
         catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: textBlock.text.slice(0, 2000) }); }
 
-        const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: allShifts, monthLabel, allowPartialCoverage: apc });
+        const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: combinedExisting, monthLabel, allowPartialCoverage: apc });
         const usage = claudeResp.usage || {};
+
+        // Enriched format ready to be passed back as accumulatedShifts for the next product
+        const pm = getProductMeta(product);
+        const enrichedShifts = (generated.shifts || []).map(s => {
+            const slot = pm && pm.slots[s.slotIndex];
+            return {
+                Date: s.date,
+                Name: s.person,
+                Product: product,
+                Start: slot ? slot.s : '',
+                End: slot ? slot.e : ''
+            };
+        });
 
         res.json({
             ok: validation.errors.length === 0,
@@ -1617,7 +1633,8 @@ app.post('/api/generate-schedule', async (req, res) => {
             shiftCount: Array.isArray(generated.shifts) ? generated.shifts.length : 0,
             generatorNotes: generated.notes || '',
             validation,
-            shifts: generated.shifts || []
+            shifts: generated.shifts || [],
+            enrichedShifts
         });
     } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
