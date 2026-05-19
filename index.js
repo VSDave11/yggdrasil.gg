@@ -470,6 +470,9 @@ const productColors = {
     "CS 2 Duels":      "#9c27b0",
     "Dota 2 Duels":    "#673ab7",
     "Madden":          "#795548",
+    "Table Tennis":    "#00bcd4",
+    "World of Tanks":  "#607d8b",
+    "eHockey":         "#e91e63",
 };
 
 // --- SDÍLENÁ DATA (dashboard + stats) ---
@@ -493,7 +496,10 @@ const productMapping = [
     { name: "Yodha League",    startCol: 26, trading: "Cricket",    slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
     { name: "CS 2 Duels",      startCol: 30, trading: "Duels",      slots: [{o:0,s:'00:00',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:00'}] },
     { name: "Dota 2 Duels",    startCol: 34, trading: "Duels",      slots: [{o:0,s:'00:01',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:01'}] },
-    { name: "Madden",          startCol: 38, trading: "eTouchdown", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] }
+    { name: "Madden",          startCol: 38, trading: "eTouchdown", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
+    { name: "Table Tennis",    startCol: 42, trading: "Table Tennis", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
+    { name: "World of Tanks",  startCol: 46, trading: "Tanks",        slots: [{o:0,s:'23:30',e:'07:30'},{o:1,s:'07:30',e:'15:30'},{o:2,s:'15:30',e:'23:30'}] },
+    { name: "eHockey",         startCol: 50, trading: "Hockey",       slots: [{o:0,s:'00:00',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:00'}] }
 ];
 
 function convertSheetTime(val) {
@@ -538,7 +544,7 @@ async function loadAllShifts(forceSync) {
         const sheet = doc.sheetsByTitle[sheetTitle];
         if (!sheet) { console.log('[SYNC] Sheet not found in doc:', sheetTitle); continue; }
         try {
-            await sheet.loadCells('A1:AQ500');
+            await sheet.loadCells('A1:BC500');
             let sheetShiftCount = 0;
             for (let r = 0; r < Math.min(sheet.rowCount, 500); r++) {
                 const dateCell = sheet.getCell(r, 0);
@@ -1324,7 +1330,7 @@ app.get('/export-csv', async (req, res) => {
 
         for (const title of scheduleSheets) {
             const sheet = doc.sheetsByTitle[title];
-            await sheet.loadCells('A1:AQ500');
+            await sheet.loadCells('A1:BC500');
             const productMapping = [
                 { name: "Valhalla Cup A", startCol: 2, trading: "FIFA", slots: [{o:0,s:'23:16',e:'07:12'},{o:1,s:'07:12',e:'15:28'},{o:2,s:'15:28',e:'23:16'}] },
                 { name: "Valhalla Cup B", startCol: 6, trading: "FIFA", slots: [{o:0,s:'23:18',e:'07:14'},{o:1,s:'07:14',e:'15:30'},{o:2,s:'15:30',e:'23:18'}] },
@@ -1335,7 +1341,10 @@ app.get('/export-csv', async (req, res) => {
                 { name: "Yodha League", startCol: 26, trading: "Cricket", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
                 { name: "CS 2 Duels", startCol: 30, trading: "Duels", slots: [{o:0,s:'00:00',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:00'}] },
                 { name: "Dota 2 Duels", startCol: 34, trading: "Duels", slots: [{o:0,s:'00:01',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:01'}] },
-                { name: "Madden", startCol: 38, trading: "eTouchdown", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] }
+                { name: "Madden", startCol: 38, trading: "eTouchdown", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
+                { name: "Table Tennis", startCol: 42, trading: "Table Tennis", slots: [{o:0,s:'23:00',e:'07:00'},{o:1,s:'07:00',e:'15:00'},{o:2,s:'15:00',e:'23:00'}] },
+                { name: "World of Tanks", startCol: 46, trading: "Tanks", slots: [{o:0,s:'23:30',e:'07:30'},{o:1,s:'07:30',e:'15:30'},{o:2,s:'15:30',e:'23:30'}] },
+                { name: "eHockey", startCol: 50, trading: "Hockey", slots: [{o:0,s:'00:00',e:'08:00'},{o:1,s:'08:00',e:'16:00'},{o:2,s:'16:00',e:'00:00'}] }
             ];
             for (let r = 0; r < Math.min(sheet.rowCount, 500); r++) {
                 const dateCell = sheet.getCell(r, 0);
@@ -2721,6 +2730,9 @@ app.get('/dashboard', async (req, res) => {
         { name: "Cricket",    color: "#4caf50", icon: "&#127955;", subs: ["Yodha League"] },
         { name: "Duels",      color: "#9c27b0", icon: "&#9876;",  subs: ["CS 2 Duels", "Dota 2 Duels"] },
         { name: "eTouchdown", color: "#795548", icon: "&#127944;", subs: ["Madden"] },
+        { name: "Table Tennis", color: "#00bcd4", icon: "&#127955;", subs: ["Table Tennis"] },
+        { name: "Tanks",      color: "#607d8b", icon: "&#128299;", subs: ["World of Tanks"] },
+        { name: "Hockey",     color: "#e91e63", icon: "&#127954;", subs: ["eHockey"] },
         { name: "Other",       color: "#607d8b", icon: "&#128203;", subs: ["Stand Up", "1on1", "All Hands", "Training", "Interview", "Other Event", "RIP", "Vacation"] }
     ];
 
@@ -4544,7 +4556,7 @@ app.get('/dashboard', async (req, res) => {
     // =============================================
     // BOD 1b: PRODUCT DROPDOWN - dynamicky podle Trading
     // =============================================
-    const productsByTrading = {"FIFA": ["Valhalla Cup A", "Valhalla Cup B", "Valhalla Cup C", "Valkyrie Cup A", "Valkyrie Cup B"], "NBA": ["Valhalla League"], "Cricket": ["Yodha League"], "Duels": ["CS 2 Duels", "Dota 2 Duels"], "eTouchdown": ["Madden"], "Other": ["Stand Up", "1on1", "All Hands", "Training", "Interview", "Other Event", "RIP", "Vacation"]};
+    const productsByTrading = {"FIFA": ["Valhalla Cup A", "Valhalla Cup B", "Valhalla Cup C", "Valkyrie Cup A", "Valkyrie Cup B"], "NBA": ["Valhalla League"], "Cricket": ["Yodha League"], "Duels": ["CS 2 Duels", "Dota 2 Duels"], "eTouchdown": ["Madden"], "Table Tennis": ["Table Tennis"], "Tanks": ["World of Tanks"], "Hockey": ["eHockey"], "Other": ["Stand Up", "1on1", "All Hands", "Training", "Interview", "Other Event", "RIP", "Vacation"]};
 
     function updateProductDropdown() {
         const trading = document.getElementById('mTrading').value;
