@@ -1529,15 +1529,20 @@ app.get('/api/schedule-sheets', async (req, res) => {
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const ANTHROPIC_MODEL_DEFAULT = 'claude-sonnet-4-6';
 
-function callClaude({ system, userMessage, model, maxTokens }) {
+function callClaude({ system, userMessage, model, maxTokens, prefillJson }) {
     return new Promise((resolve, reject) => {
         if (!ANTHROPIC_API_KEY) return reject(new Error('ANTHROPIC_API_KEY not set on server'));
         const https = require('https');
+        const messages = [{ role: 'user', content: userMessage }];
+        if (prefillJson) {
+            // Force model to start with '{' — skips analysis prose, output is pure JSON.
+            messages.push({ role: 'assistant', content: '{' });
+        }
         const body = JSON.stringify({
             model: model || ANTHROPIC_MODEL_DEFAULT,
             max_tokens: maxTokens || 16000,
             system,
-            messages: [{ role: 'user', content: userMessage }]
+            messages
         });
         const req = https.request({
             hostname: 'api.anthropic.com',
@@ -1598,14 +1603,22 @@ app.post('/api/generate-schedule', async (req, res) => {
         const combinedExisting = allShifts.concat(accumExtras);
         const prompt = buildGeneratorPrompt({ monthLabel, product, capabilities: caps, existingShifts: combinedExisting, rules: { allowPartialCoverage: apc } });
         const t0 = Date.now();
-        const claudeResp = await callClaude({ system: prompt.system, userMessage: prompt.user, model });
+        const claudeResp = await callClaude({
+            system: prompt.system,
+            userMessage: prompt.user,
+            model,
+            maxTokens: 32000,
+            prefillJson: true
+        });
         const elapsed = Date.now() - t0;
 
         const textBlock = (claudeResp.content || []).find(c => c.type === 'text');
         if (!textBlock) return res.status(502).json({ error: 'No text block in Claude response', raw: claudeResp });
+        // Because we prefilled '{', the response starts mid-JSON — prepend it back.
+        const rawText = textBlock.text.trimStart().startsWith('{') ? textBlock.text : '{' + textBlock.text;
         let generated;
-        try { generated = extractJsonFromText(textBlock.text); }
-        catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: textBlock.text.slice(0, 2000) }); }
+        try { generated = extractJsonFromText(rawText); }
+        catch(e) { return res.status(502).json({ error: 'JSON parse failed: ' + e.message, rawText: rawText.slice(0, 2000), stopReason: claudeResp.stop_reason }); }
 
         const validation = validateGeneratedSchedule(generated, { product, capabilities: caps, existingShifts: combinedExisting, monthLabel, allowPartialCoverage: apc });
         const usage = claudeResp.usage || {};
